@@ -54,12 +54,9 @@
   "scripts": {
     "prepare": "npm run build",
     "build": "tsx scripts/build.ts",
-    "ci": "npm run check && npm run build && npm pack --dry-run --ignore-scripts",
-    "ci:act": "act push --job guest-api",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run check:effect && npm test",
     "check:effect": "effect-language-service diagnostics --project tsconfig.json --strict --format text",
-    "check:release": "node scripts/check-release-consistency.mjs",
     "prepublishOnly": "npm run build",
     "test": "vitest run --exclude=target/**"
   },
