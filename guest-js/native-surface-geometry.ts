@@ -1,4 +1,4 @@
-import type { VisibleSurfaceBounds } from './native-surface-layout'
+import { clamp, type VisibleSurfaceBounds } from './native-surface-layout'
 
 export interface Rect {
   left: number
@@ -139,10 +139,6 @@ function cleanPercent(value: number): number {
   if (Math.abs(value) < 0.0001) return 0
   if (Math.abs(value - 100) < 0.0001) return 100
   return Math.round(value * 1_000) / 1_000
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value))
 }
 
 const EMPTY_PANEL: Rect = Object.freeze({ left: 0, top: 0, width: 0, height: 0 })

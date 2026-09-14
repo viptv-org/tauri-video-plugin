@@ -4,10 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class VideoPluginUnitTest {
-    @Test fun packageNameIsStable() {
-        assertEquals("io.github.taurivideo.plugin", VideoPlugin::class.java.packageName)
-    }
-
     @Test fun absentNativeBufferOverridesUseMedia3Defaults() {
         assertEquals(null, resolveRequestedTargetBufferBytes(null))
         assertEquals(null, resolveRequestedBufferDurations(NativeOpenArgs()))

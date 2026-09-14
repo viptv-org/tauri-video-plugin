@@ -56,6 +56,11 @@ export function visibleSurfaceBounds(
   }
 }
 
+/** Canonical numeric clamp shared by the surface layout and geometry helpers. */
+export function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
 export function sameNativeSurfacePosition(
   left: NativeSurfacePosition,
   right: NativeSurfacePosition | undefined,
@@ -70,8 +75,4 @@ export function sameNativeSurfacePosition(
     && Math.abs(leftY - rightY) < 0.5
     && Math.abs(left.width - right.width) < 0.5
     && Math.abs(left.height - right.height) < 0.5
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value))
 }

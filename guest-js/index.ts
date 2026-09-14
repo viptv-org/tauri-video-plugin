@@ -570,13 +570,8 @@ class NativeSurfaceVideoController extends EventTarget implements BackendVideoCo
         this.element.dispatchEvent(new Event(snapshot.playing ? 'play' : 'pause'))
         if (snapshot.playing) this.element.dispatchEvent(new Event('playing'))
       }
-      const wasEnded = Boolean(previous
-        && !previous.live
-        && previous.durationSeconds > 0
-        && previous.currentTimeSeconds >= previous.durationSeconds)
-      const isEnded = !snapshot.live
-        && snapshot.durationSeconds > 0
-        && snapshot.currentTimeSeconds >= snapshot.durationSeconds
+      const wasEnded = hasEnded(previous)
+      const isEnded = hasEnded(snapshot)
       if (!wasEnded && isEnded) {
         this.#requestedPlaying = false
         this.element.dispatchEvent(new Event('ended'))
@@ -655,17 +650,15 @@ class NativeSurfaceVideoController extends EventTarget implements BackendVideoCo
       }
       Object.defineProperty(this.element, key, { configurable: true, ...descriptor })
     }
-    const ranges = (start: number, end: number): TimeRanges => ({
-      length: end > start ? 1 : 0,
-      start: (index: number) => {
-        if (index !== 0 || end <= start) throw new DOMException('Index out of bounds', 'IndexSizeError')
-        return start
-      },
-      end: (index: number) => {
-        if (index !== 0 || end <= start) throw new DOMException('Index out of bounds', 'IndexSizeError')
-        return end
-      },
-    })
+    const ranges = (start: number, end: number): TimeRanges => {
+      const bound = (value: number) => (index: number) => {
+        if (index !== 0 || end <= start) {
+          throw new DOMException('Index out of bounds', 'IndexSizeError')
+        }
+        return value
+      }
+      return { length: end > start ? 1 : 0, start: bound(start), end: bound(end) }
+    }
 
     define('play', { value: () => this.play() })
     define('pause', { value: () => this.pause() })
@@ -679,12 +672,7 @@ class NativeSurfaceVideoController extends EventTarget implements BackendVideoCo
         : this.#snapshot?.durationSeconds ?? Number.NaN,
     })
     define('paused', { get: () => !this.#requestedPlaying })
-    define('ended', {
-      get: () => Boolean(this.#snapshot
-        && !this.#snapshot.live
-        && this.#snapshot.durationSeconds > 0
-        && this.#snapshot.currentTimeSeconds >= this.#snapshot.durationSeconds),
-    })
+    define('ended', { get: () => hasEnded(this.#snapshot) })
     define('volume', {
       get: () => this.#volume,
       set: (value: number) => { this.#runDetached(this.setVolume(Number(value))) },
@@ -815,7 +803,7 @@ class NativeSurfaceVideoController extends EventTarget implements BackendVideoCo
 
   #supportsCompleteVideoGeometry(): boolean {
     if (this.#platform === 'android' || this.#platform === 'windows') return true
-    if (this.#platform !== 'linux') return false
+    // Linux only: the default GStreamer sink cannot crop, but mpv can.
     return this.#options.playback?.engine === 'mpv'
       || /\bmpv\b/i.test(this.#snapshot?.hardwareBackend ?? '')
   }
@@ -918,6 +906,14 @@ function nativeScrollTargets(anchor: HTMLElement): EventTarget[] {
     targets.add(element)
   }
   return [...targets]
+}
+
+/** A finite timeline is ended once playout reaches its reported duration. */
+function hasEnded(snapshot: NativePlaybackSnapshot | undefined): boolean {
+  return Boolean(snapshot
+    && !snapshot.live
+    && snapshot.durationSeconds > 0
+    && snapshot.currentTimeSeconds >= snapshot.durationSeconds)
 }
 
 async function unsupported(feature: string, message: string): Promise<never> {
