@@ -13,6 +13,23 @@ pub struct NativePluginDiagnostics {
     pub crate_name: String,
     pub crate_version: String,
     pub platform: String,
+    /// Playback engines compiled into this build, in the order an 'auto'
+    /// client should prefer them.
+    pub engines: Vec<String>,
+}
+
+/// The playback engines compiled into this build, in the order an 'auto'
+/// client should prefer them. Linux prefers mpv when its runtime was
+/// compiled; GStreamer serves both desktop platforms.
+fn compiled_engines() -> Vec<String> {
+    let mut engines = Vec::new();
+    if cfg!(all(target_os = "linux", feature = "mpv-runtime")) {
+        engines.push("mpv".into());
+    }
+    if cfg!(feature = "gstreamer-runtime") && cfg!(any(target_os = "linux", windows)) {
+        engines.push("gstreamer".into());
+    }
+    engines
 }
 
 impl NativePluginDiagnostics {
@@ -22,6 +39,7 @@ impl NativePluginDiagnostics {
             crate_name: env!("CARGO_PKG_NAME").to_owned(),
             crate_version: env!("CARGO_PKG_VERSION").to_owned(),
             platform: std::env::consts::OS.to_owned(),
+            engines: compiled_engines(),
         }
     }
 }
@@ -180,6 +198,9 @@ pub struct NativePlaybackSnapshot {
     pub measured_fps: f64,
     #[serde(default)]
     pub hardware_backend: String,
+    /// The engine serving this snapshot, e.g. "gstreamer" or "mpv".
+    #[serde(default)]
+    pub backend: String,
     #[serde(default)]
     pub encoded_bytes_buffered: u64,
     #[serde(default)]
