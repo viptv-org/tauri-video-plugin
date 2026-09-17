@@ -533,6 +533,17 @@ mod gstreamer {
                         .map_err(|error| Error::Pipeline(error.to_string()))?;
                 }
                 "seek" => {
+                    // A resume seek can arrive immediately after open, while
+                    // playbin3 is still mid-async-transition (not prerolled);
+                    // seeking a transitioning pipeline stalls it. Wait bounded
+                    // for the pending state change to settle before flushing.
+                    let (transition, _current, _pending) =
+                        player.pipeline.state(Some(gst::ClockTime::from_seconds(3)));
+                    transition.map_err(|error| {
+                        Error::Pipeline(format!(
+                            "native pipeline state did not settle before seek: {error}"
+                        ))
+                    })?;
                     player
                         .pipeline
                         .seek_simple(
