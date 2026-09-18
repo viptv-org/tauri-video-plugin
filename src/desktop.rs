@@ -1772,6 +1772,16 @@ mod linux_mpv {
             .max(position)
             .min(duration.max(position));
         let seekable = property::<bool>(&player.mpv, "seekable").unwrap_or(!live);
+        // The engine's own seekable window: for unseekable media mpv reports
+        // the demuxer cache range, the only region a seek can serve. The
+        // previous full-duration fabrication unlocked seeks the origin could
+        // not land, which replayed the beginning instead of failing.
+        let seekable_start = property::<f64>(&player.mpv, "seekable-start")
+            .map(|value| value.max(0.0))
+            .unwrap_or(0.0);
+        let seekable_end = property::<f64>(&player.mpv, "seekable-end")
+            .filter(|value| *value > seekable_start)
+            .unwrap_or(duration.max(buffered));
         let rendered = player.presented_frames.get();
         let dropped = property::<i64>(&player.mpv, "frame-drop-count")
             .unwrap_or(0)
@@ -1806,8 +1816,8 @@ mod linux_mpv {
             buffered_seconds: buffered,
             live,
             seekable,
-            seekable_start_seconds: 0.0,
-            seekable_end_seconds: duration.max(buffered),
+            seekable_start_seconds: seekable_start,
+            seekable_end_seconds: seekable_end,
             playing: !paused,
             video_width,
             video_height,
