@@ -238,13 +238,10 @@ mod linux {
 
     pub fn close(payload: NativeSessionRequest) -> Result<()> {
         let backend = active_backend()?;
-        let owns_session = match backend {
-            Backend::Gstreamer => super::linux_gstreamer::owns_session(&payload.session_key),
-            Backend::Mpv => super::linux_mpv::owns_session(&payload.session_key),
-        };
-        if !owns_session {
-            return Ok(());
-        }
+        // A close means the caller is finished with the native player. A key
+        // mismatch would mean the adapter and the engine desynchronized;
+        // leaving the engine running would leak playing audio, so the engine
+        // parks regardless of the presented key.
         let result = match backend {
             Backend::Gstreamer => super::linux_gstreamer::close(payload),
             Backend::Mpv => super::linux_mpv::close(payload),
@@ -876,24 +873,10 @@ mod linux_gstreamer {
         })
     }
 
-    pub fn close(payload: NativeSessionRequest) -> Result<()> {
-        let owns_player = PLAYER.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .is_some_and(|player| player.session_key == payload.session_key)
-        });
-        if !owns_player {
-            return Ok(());
-        }
+    pub fn close(_payload: NativeSessionRequest) -> Result<()> {
+        // A close means the caller is finished with the native player; park
+        // regardless of the presented key so audio cannot leak.
         park_player()
-    }
-
-    pub fn owns_session(session_key: &str) -> bool {
-        PLAYER.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .is_some_and(|player| player.session_key == session_key)
-        })
     }
 
     pub fn force_close() -> Result<()> {
@@ -1486,6 +1469,17 @@ mod linux_mpv {
                 },
             )
             .map_err(mpv_error)?;
+        // Open at the requested title position instead of starting at zero
+        // and seeking after opening: the opening seconds of the wrong
+        // position were visible and audible before the post-open seek
+        // landed, which read as "the first seek restarts at the beginning".
+        player
+            .mpv
+            .set_property(
+                "start",
+                format!("+{:.3}", payload.start_at_seconds.max(0.0)),
+            )
+            .map_err(mpv_error)?;
         player
             .mpv
             .set_property("pause", !payload.autoplay)
@@ -1721,24 +1715,13 @@ mod linux_mpv {
         })
     }
 
-    pub fn close(payload: NativeSessionRequest) -> Result<()> {
-        let owns_player = PLAYER.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .is_some_and(|player| player.session_key == payload.session_key)
-        });
-        if owns_player {
-            park_player()?;
-        }
+    pub fn close(_payload: NativeSessionRequest) -> Result<()> {
+        // A close means the caller is finished with the native player. A key
+        // mismatch would mean the adapter and the engine desynchronized;
+        // leaving the engine running would leak playing audio, so park
+        // regardless of the presented key.
+        park_player()?;
         Ok(())
-    }
-
-    pub fn owns_session(session_key: &str) -> bool {
-        PLAYER.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .is_some_and(|player| player.session_key == session_key)
-        })
     }
 
     pub fn force_close() -> Result<()> {
@@ -2153,6 +2136,45 @@ mod engine_http_tests {
         mpv.command("stop", &[]).expect("engine stop");
     }
 
+    #[cfg(feature = "mpv-runtime")]
+    #[test]
+    fn mpv_engine_opens_at_the_requested_start_position() {
+        let port = serve_fixture(mp4_fixture().clone()).expect("local HTTP fixture starts");
+        let uri = format!("http://127.0.0.1:{port}/fixture.mp4");
+        let mpv = super::linux_mpv::create_engine(false).expect("mpv engine handle");
+        mpv.set_property("vo", "null".to_owned())
+            .expect("null video output");
+        mpv.set_property("pause", false).expect("autoplay");
+        // The open payload's start position must take effect as the file
+        // loads, not through a post-open seek: that seek is visible as the
+        // opening of the wrong position before the jump lands.
+        mpv.set_property("start", "+3.0".to_owned())
+            .expect("start position");
+        mpv.command("loadfile", &[&uri, "replace"])
+            .expect("loadfile");
+        let position = || mpv.get_property::<f64>("time-pos").unwrap_or(0.0);
+        let duration = || mpv.get_property::<f64>("duration").unwrap_or(0.0);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if duration() > 5.0 && position() > 0.0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "mpv engine never progressed from the requested start"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // The first progress report is already past the requested start;
+        // playback never showed the beginning of the file.
+        assert!(
+            position() >= 2.0,
+            "engine opened at the beginning instead of the requested start: {}",
+            position()
+        );
+        mpv.command("stop", &[]).expect("engine stop");
+    }
+
     #[cfg(feature = "gstreamer-runtime")]
     #[test]
     fn gstreamer_engine_opens_stats_and_seeks_an_http_mp4() {
@@ -2259,9 +2281,6 @@ mod unavailable_linux_backend {
     }
     pub fn close(_: NativeSessionRequest) -> Result<()> {
         Ok(())
-    }
-    pub fn owns_session(_: &str) -> bool {
-        false
     }
     pub fn force_close() -> Result<()> {
         Ok(())

@@ -96,6 +96,8 @@ pub struct NativeOpenRequest {
     #[serde(default)]
     pub muted: bool,
     #[serde(default)]
+    pub start_at_seconds: f64,
+    #[serde(default)]
     pub min_buffer_ms: Option<u32>,
     #[serde(default)]
     pub max_buffer_ms: Option<u32>,
