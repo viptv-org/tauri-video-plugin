@@ -9,7 +9,6 @@ import type {
   TrackKind,
   VideoControllerEventMap,
   VideoFitMode,
-  VideoPluginError,
 } from '@get-air/video'
 import {
   nativeOpenSettings,
@@ -29,12 +28,13 @@ import {
   type VideoControlsTarget,
 } from './native-surface-compositor'
 import {
-  errorMessage,
   TAURI_VIDEO_PACKAGE_VERSION,
   TAURI_VIDEO_PROTOCOL_VERSION,
   verifyTauriVideoProtocol,
 } from './protocol'
 import { nativeFeatureUnavailableError } from './runtime-errors'
+import { updateNativeMedia, hasEnded, normalizeError } from './native-media-mapper'
+import { COMMAND, webView2TextureStream } from './webview2-texture-stream'
 
 export {
   registerVideoControls,
@@ -60,22 +60,6 @@ export type {
   TauriPlaybackOptions,
   WindowsPlaybackOptions,
 } from './models'
-
-const COMMAND = 'plugin:video|'
-
-interface WebView2TextureStreamApi {
-  getTextureStream(streamId: string): Promise<MediaStream>
-}
-
-function webView2TextureStream(): WebView2TextureStreamApi | undefined {
-  const scope = globalThis as typeof globalThis & {
-    chrome?: { webview?: Partial<WebView2TextureStreamApi> }
-  }
-  const getTextureStream = scope.chrome?.webview?.getTextureStream
-  return typeof getTextureStream === 'function'
-    ? { getTextureStream: getTextureStream.bind(scope.chrome?.webview) }
-    : undefined
-}
 
 /** @internal Raw Tauri backend factory used by the public adapter. */
 export async function attachTauriBackend(
@@ -584,48 +568,7 @@ class NativeSurfaceVideoController extends EventTarget implements BackendVideoCo
   }
 
   #updateMedia(snapshot: NativePlaybackSnapshot): void {
-    const live = snapshot.live ?? false
-    this.#media.durationSeconds = live ? undefined : snapshot.durationSeconds
-    this.#media.seekable = snapshot.seekable ?? !live
-    this.#media.seekableStartSeconds = this.#media.seekable
-      ? snapshot.seekableStartSeconds ?? 0
-      : undefined
-    this.#media.seekableEndSeconds = this.#media.seekable
-      ? snapshot.seekableEndSeconds ?? (live ? undefined : snapshot.durationSeconds)
-      : undefined
-    this.#media.live = live
-    this.#media.container = snapshot.container ?? 'unknown'
-    const tracksChanged = snapshot.tracks.length !== this.#media.tracks.length
-      || snapshot.tracks.some((track, index) => {
-        const cached = this.#media.tracks[index]
-        return !cached
-          || cached.id !== track.id
-          || cached.kind !== track.kind
-          || cached.streamIndex !== track.index
-          || cached.codec !== track.codec
-          || cached.label !== track.label
-          || cached.language !== track.language
-          || cached.selected !== track.selected
-          || (track.kind === 'video' && (
-            cached.width !== snapshot.videoWidth || cached.height !== snapshot.videoHeight
-          ))
-      })
-    if (tracksChanged) {
-      this.#media.tracks = snapshot.tracks.map((track) => ({
-        id: track.id,
-        kind: track.kind,
-        streamIndex: track.index,
-        codec: track.codec,
-        caps: track.codec,
-        label: track.label,
-        language: track.language,
-        selected: track.selected,
-        default: false,
-        forced: false,
-        width: track.kind === 'video' ? snapshot.videoWidth : undefined,
-        height: track.kind === 'video' ? snapshot.videoHeight : undefined,
-      }))
-    }
+    updateNativeMedia(this.#media, snapshot)
   }
 
   #acceptSnapshot(snapshot: NativePlaybackSnapshot): NativePlaybackSnapshot {
@@ -908,21 +851,6 @@ function nativeScrollTargets(anchor: HTMLElement): EventTarget[] {
   return [...targets]
 }
 
-/** A finite timeline is ended once playout reaches its reported duration. */
-function hasEnded(snapshot: NativePlaybackSnapshot | undefined): boolean {
-  return Boolean(snapshot
-    && !snapshot.live
-    && snapshot.durationSeconds > 0
-    && snapshot.currentTimeSeconds >= snapshot.durationSeconds)
-}
-
 async function unsupported(feature: string, message: string): Promise<never> {
   throw await nativeFeatureUnavailableError({ backend: 'tauri', feature, message })
-}
-
-function normalizeError(error: unknown): VideoPluginError {
-  if (typeof error === 'object' && error && 'code' in error && 'message' in error) {
-    return error as VideoPluginError
-  }
-  return { code: 'transport', message: errorMessage(error) }
 }

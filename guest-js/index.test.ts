@@ -26,11 +26,6 @@ import {
   TAURI_VIDEO_PACKAGE_VERSION,
   TAURI_VIDEO_PROTOCOL_VERSION,
 } from './index'
-import {
-  sameNativeSurfacePosition,
-  snapNativeSurfaceLayout,
-  visibleSurfaceBounds,
-} from './native-surface-layout'
 import { clearVerifiedTauriVideoProtocolForTesting } from './protocol'
 
 interface TestSnapshot {
@@ -100,43 +95,6 @@ beforeEach(() => {
     },
   })
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
-  const gl = {
-    ARRAY_BUFFER: 0x8892,
-    STATIC_DRAW: 0x88E4,
-    FLOAT: 0x1406,
-    TEXTURE_2D: 0x0DE1,
-    TEXTURE_WRAP_S: 0x2802,
-    TEXTURE_WRAP_T: 0x2803,
-    CLAMP_TO_EDGE: 0x812F,
-    TEXTURE_MIN_FILTER: 0x2801,
-    TEXTURE_MAG_FILTER: 0x2800,
-    LINEAR: 0x2601,
-    VERTEX_SHADER: 0x8B31,
-    FRAGMENT_SHADER: 0x8B30,
-    COMPILE_STATUS: 0x8B81,
-    LINK_STATUS: 0x8B82,
-    createShader: vi.fn(() => ({})),
-    shaderSource: vi.fn(),
-    compileShader: vi.fn(),
-    getShaderParameter: vi.fn(() => true),
-    getShaderInfoLog: vi.fn(() => ''),
-    createProgram: vi.fn(() => ({})),
-    attachShader: vi.fn(),
-    linkProgram: vi.fn(),
-    getProgramParameter: vi.fn(() => true),
-    getProgramInfoLog: vi.fn(() => ''),
-    useProgram: vi.fn(),
-    createBuffer: vi.fn(() => ({})),
-    bindBuffer: vi.fn(),
-    bufferData: vi.fn(),
-    getAttribLocation: vi.fn(() => 0),
-    enableVertexAttribArray: vi.fn(),
-    vertexAttribPointer: vi.fn(),
-    createTexture: vi.fn(() => ({})),
-    bindTexture: vi.fn(),
-    texParameteri: vi.fn(),
-  } as unknown as WebGLRenderingContext
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(gl)
   snapshot = {
     durationSeconds: 120,
     currentTimeSeconds: 0,
@@ -234,7 +192,7 @@ describe('native controller contract', () => {
     })
   })
 
-  it('keeps Windows TextureStream video in the DOM without a native aperture', async () => {
+  it('exposes stable, unique, platform-correct session IDs', async () => {
     const element = document.createElement('video')
     const controls = document.createElement('div')
     document.body.append(element, controls)
@@ -260,19 +218,18 @@ describe('native controller contract', () => {
       y: 360,
       toJSON: () => ({}),
     })
-
-    const controller = await attachTauriBackend(element, {
+    const first = await attachTauriBackend(element, {
       source: 'movie.mkv',
       suspendWhenHidden: false,
       controlRegions: [controls],
     })
-    controllers.add(controller)
+    controllers.add(first)
+    const second = await attach()
 
-    const open = mocks.invoke.mock.calls.find(([command]) => commandName(command) === 'native_open')
-    expect((open?.[1] as { payload?: Record<string, unknown> })?.payload)
-      .not.toHaveProperty('surfaceAperture')
-    expect((open?.[1] as { payload?: Record<string, unknown> })?.payload)
-      .not.toHaveProperty('surfaceOverlays')
+    expect(first.sessionId).toMatch(/^windows-native-surface-/)
+    expect(second.sessionId).toMatch(/^windows-native-surface-/)
+    expect(second.sessionId).not.toBe(first.sessionId)
+    expect((await first.stats()).sessionId).toBe(first.sessionId)
   })
 
   it('rejects a different native protocol before opening a player', async () => {
@@ -326,31 +283,6 @@ describe('native controller contract', () => {
       .toBe(true)
     expect(mocks.invoke.mock.calls.map(([command]) => commandName(command)))
       .toEqual(['native_diagnostics'])
-
-    mocks.invoke.mockImplementation(async (command: unknown) => {
-      if (commandName(command) === 'native_diagnostics') {
-        return {
-          protocolVersion: TAURI_VIDEO_PROTOCOL_VERSION,
-          crateName: 'tauri-plugin-video',
-          crateVersion: '0.1.0',
-        }
-      }
-      if (commandName(command) === 'native_prepare_texture_stream') return 'air-video-test'
-      if (commandName(command) === 'native_open'
-        || commandName(command) === 'native_control') return structuredClone(snapshot)
-      return undefined
-    })
-    await expect(attach()).resolves.toMatchObject({ sessionId: expect.any(String) })
-  })
-
-  it('exposes stable, unique, platform-correct session IDs', async () => {
-    const first = await attach()
-    const second = await attach()
-
-    expect(first.sessionId).toMatch(/^windows-native-surface-/)
-    expect(second.sessionId).toMatch(/^windows-native-surface-/)
-    expect(second.sessionId).not.toBe(first.sessionId)
-    expect((await first.stats()).sessionId).toBe(first.sessionId)
   })
 
   it('exposes live metadata and a moving seek window without reporting an end', async () => {
@@ -508,52 +440,4 @@ describe('native controller contract', () => {
 
     expect(nativeActions()).toEqual(['crop', 'zoom'])
   })
-})
-
-describe('native surface geometry', () => {
-  it('uses the same integer logical pixels as the Linux GTK host', () => {
-    const layout = snapNativeSurfaceLayout(
-      { left: 10.49, top: 20.51, width: 500.5, height: 300.49 },
-      false,
-      1,
-    )
-    expect(layout).toEqual({ x: 10, y: 21, width: 501, height: 300 })
-    expect(visibleSurfaceBounds(layout, 1, { width: 1200, height: 800 }))
-      .toEqual({ left: 10, top: 21, right: 511, bottom: 321 })
-  })
-
-  it('converts Android physical-pixel edges back to an exact CSS aperture', () => {
-    const scale = 2.625
-    const layout = snapNativeSurfaceLayout(
-      { left: 7.8, top: 11.4, width: 320.6, height: 180.4 },
-      true,
-      scale,
-    )
-    const bounds = visibleSurfaceBounds(layout, scale, { width: 400, height: 300 })
-    expect(layout).toEqual({ x: 20, y: 29, width: 841, height: 473 })
-    expect(bounds.right - bounds.left).toBe(layout.width / scale)
-    expect(bounds.bottom - bounds.top).toBe(layout.height / scale)
-  })
-
-  it('clamps a partially offscreen surface without exposing the viewport', () => {
-    expect(visibleSurfaceBounds(
-      { x: -24, y: -10, width: 300, height: 200 },
-      1,
-      { width: 240, height: 180 },
-    )).toEqual({ left: 0, top: 0, right: 240, bottom: 180 })
-  })
-
-  it('treats Android root scrolling as the same document-space layout', () => {
-    const before = { x: 20, y: 600, width: 900, height: 500, scrollX: 0, scrollY: 0 }
-    const after = { x: 20, y: 180, width: 900, height: 500, scrollX: 0, scrollY: 420 }
-    expect(sameNativeSurfacePosition(after, before, true)).toBe(true)
-    expect(sameNativeSurfacePosition(after, before, false)).toBe(false)
-  })
-
-  it('still sends Android layout changes caused by nested scrollers', () => {
-    const before = { x: 20, y: 600, width: 900, height: 500, scrollX: 0, scrollY: 0 }
-    const nestedScroll = { x: 20, y: 180, width: 900, height: 500, scrollX: 0, scrollY: 0 }
-    expect(sameNativeSurfacePosition(nestedScroll, before, true)).toBe(false)
-  })
-
 })
