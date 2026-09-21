@@ -11,7 +11,7 @@ const COMMAND = 'plugin:video|'
  * remain compatible at the same protocol version.
  */
 export const TAURI_VIDEO_PROTOCOL_VERSION = 1 as const
-export const TAURI_VIDEO_PACKAGE_NAME = '@get-air/video-tauri' as const
+export const TAURI_VIDEO_PACKAGE_NAME = '@viptv/video-tauri' as const
 // Kept explicit so diagnostics work in browsers. A focused test enforces that
 // this value cannot drift from package.json during a version bump.
 export const TAURI_VIDEO_PACKAGE_VERSION = '0.4.0' as const
@@ -66,7 +66,7 @@ async function verifyTauriVideoProtocolUncached(): Promise<TauriVideoDiagnostics
     diagnostics = await getTauriVideoDiagnostics()
   } catch (cause) {
     throw await protocolMismatch({
-      message: `${TAURI_VIDEO_PACKAGE_NAME}@${TAURI_VIDEO_PACKAGE_VERSION} could not verify the native video protocol. Update @get-air/video-tauri and tauri-plugin-video to a compatible pair.`,
+      message: `${TAURI_VIDEO_PACKAGE_NAME}@${TAURI_VIDEO_PACKAGE_VERSION} could not verify the native video protocol. Update @viptv/video-tauri and tauri-plugin-video to a compatible pair.`,
       cause: errorMessage(cause),
     })
   }

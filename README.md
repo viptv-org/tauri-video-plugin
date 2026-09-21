@@ -5,3 +5,11 @@ Native playback adapter for the VIPTV Tauri desktop application. It was independ
 The desktop product uses Tauri + React. The DOM owns VIPTV layout, controls, focus, and overlays. This Rust plugin owns native engine adaptation and attaches that capability to the shared controller in `viptv-org/video`.
 
 Inherited GitHub workflows and release commands were removed. Run `npm run check`, `npm run build`, and `cargo test` locally when the required host media runtime is installed.
+
+## Identity
+
+This repository is VIPTV's native Tauri video engine. The Rust crate
+(`tauri-plugin-video`) is consumed by the VIPTV desktop app by path. The npm
+package surface (`@viptv/video-tauri`) is the JavaScript protocol façade; it
+wraps the upstream get-air player library (`@get-air/video`) as a peer
+dependency, which is why that dependency remains.

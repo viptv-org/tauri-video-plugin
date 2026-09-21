@@ -1,8 +1,8 @@
 {
-  "name": "@get-air/video-tauri",
+  "name": "@viptv/video-tauri",
   "version": "0.4.0",
   "author": "Air contributors",
-  "description": "Native Tauri backend adapter for @get-air/video",
+  "description": "Tauri native video engine for VIPTV (Rust crate + the JS protocol fa\u00e7ade that wraps the get-air player library).",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
@@ -63,7 +63,9 @@
   "overrides": {
     "nanoid": "^3.3.18"
   },
-  "allowScripts": { "esbuild": true },
+  "allowScripts": {
+    "esbuild": true
+  },
   "dependencies": {
     "@get-air/http": "^0.1.0",
     "@plussub/srt-vtt-parser": "^2.0.5",
