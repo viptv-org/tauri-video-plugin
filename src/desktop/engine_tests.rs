@@ -106,9 +106,13 @@ fn mpv_engine_opens_stats_and_seeks_an_http_mp4() {
     let uri = format!("http://127.0.0.1:{port}/fixture.mp4");
     let mpv = super::linux_mpv::create_engine(false).expect("mpv engine handle");
     // No GL surface exists in cargo tests; the null output still runs the
-    // demuxer and decoders, which is the failure domain under test.
+    // demuxer and decoders, which is the failure domain under test. Audio is
+    // likewise nulled: headless CI probes PipeWire/ALSA with no daemon and
+    // that path is not what this test exercises.
     mpv.set_property("vo", "null".to_owned())
         .expect("null video output");
+    mpv.set_property("ao", "null".to_owned())
+        .expect("null audio output");
     mpv.set_property("pause", false).expect("autoplay");
     mpv.command("loadfile", &[&uri, "replace"])
         .expect("loadfile");
