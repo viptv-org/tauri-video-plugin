@@ -52,7 +52,7 @@ pub enum TrackKind {
     Subtitle,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeOpenRequest {
     /// Protocol and adapter version are required by protocol 1. They remain
@@ -117,6 +117,96 @@ pub struct NativeOpenRequest {
 
 const fn default_true() -> bool {
     true
+}
+
+impl std::fmt::Debug for NativeOpenRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NativeOpenRequest { source_and_credentials: <redacted> }")
+    }
+}
+
+impl NativeOpenRequest {
+    pub(crate) fn validate_authorization(&self) -> crate::Result<()> {
+        let valid = |value: &str| value.len() <= 8192 && !value.chars().any(char::is_control);
+        let mut names = std::collections::BTreeSet::new();
+        let bad = self.headers.len() > 32
+            || self.headers.iter().any(|(name, value)| {
+                let lower = name.to_ascii_lowercase();
+                name.is_empty()
+                    || name.len() > 128
+                    || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    || !valid(value)
+                    || !names.insert(lower.clone())
+                    || matches!(
+                        lower.as_str(),
+                        "host"
+                            | "connection"
+                            | "content-length"
+                            | "transfer-encoding"
+                            | "proxy-authorization"
+                            | "upgrade"
+                            | "keep-alive"
+                            | "te"
+                            | "trailer"
+                    )
+            })
+            || [&self.cookies, &self.user_agent, &self.referrer]
+                .into_iter()
+                .flatten()
+                .any(|value| !valid(value));
+        let conflicting = [
+            ("cookie", self.cookies.as_ref()),
+            ("user-agent", self.user_agent.as_ref()),
+            ("referer", self.referrer.as_ref()),
+        ]
+        .into_iter()
+        .any(|(name, property)| {
+            property.is_some_and(|property| {
+                self.headers
+                    .iter()
+                    .any(|(key, value)| key.eq_ignore_ascii_case(name) && value != property)
+            })
+        });
+        if bad || conflicting {
+            Err(crate::Error::InvalidRequest(
+                "Invalid source authorization".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod authorization_tests {
+    use super::*;
+    #[test]
+    fn native_headers_are_bounded_and_debug_redacts_all_source_fields() {
+        let mut value = serde_json::json!({"uri":"https://private.invalid/token","x":0,"y":0,"width":100,"height":100,"headers":{"Authorization":"Bearer secret"},"tlsCaFile":"/home/private/ca.pem"});
+        let payload: NativeOpenRequest = serde_json::from_value(value.clone()).unwrap();
+        payload.validate_authorization().unwrap();
+        let debug = format!("{payload:?}");
+        for secret in ["private.invalid", "secret", "/home/private"] {
+            assert!(!debug.contains(secret));
+        }
+        for headers in [
+            serde_json::json!({"Host":"private"}),
+            serde_json::json!({"Cookie":"a\r\nX-Injected: secret"}),
+            serde_json::json!({"Referer":"a","referer":"b"}),
+        ] {
+            value["headers"] = headers;
+            assert!(serde_json::from_value::<NativeOpenRequest>(value.clone())
+                .unwrap()
+                .validate_authorization()
+                .is_err());
+        }
+        value["headers"] = serde_json::json!({"Cookie":"one"});
+        value["cookies"] = serde_json::json!("two");
+        assert!(serde_json::from_value::<NativeOpenRequest>(value)
+            .unwrap()
+            .validate_authorization()
+            .is_err());
+    }
 }
 
 const fn default_volume() -> f64 {

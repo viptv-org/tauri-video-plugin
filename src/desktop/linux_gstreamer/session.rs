@@ -324,16 +324,15 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                 }
             }
             gst::MessageView::Error(error) => {
-                let message =
-                    format!("{}: {}", error.error(), error.debug().unwrap_or_default());
-                player.error = Some(message.clone());
-                return Err(Error::Pipeline(message));
+                let failure = crate::error::NativeMediaFailure::from_gstreamer(&error.error());
+                player.error = Some(failure);
+                return Err(failure.into_error());
             }
             _ => {}
         }
     }
-    if let Some(error) = player.error.clone() {
-        return Err(Error::Pipeline(error));
+    if let Some(error) = player.error {
+        return Err(error.into_error());
     }
     Ok(())
 }

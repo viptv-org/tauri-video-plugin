@@ -41,7 +41,7 @@ struct NativePlayer {
     buffer_duration_seconds: Option<f64>,
     target_buffer_bytes: Option<u64>,
     desired_playing: bool,
-    error: Option<String>,
+    error: Option<crate::error::NativeMediaFailure>,
     last_rendered: u64,
     last_sample_at: Instant,
     measured_fps: f64,
@@ -77,7 +77,7 @@ fn initialize_gstreamer() -> Result<()> {
         .map_err(Error::RuntimeUnavailable)
 }
 
-fn configure_source(element: &gst::Element, source: &NativeOpenRequest) {
+pub(super) fn configure_source(element: &gst::Element, source: &NativeOpenRequest) {
     if let Some(user_agent) = source.user_agent.as_deref() {
         if element.find_property("user-agent").is_some() {
             element.set_property("user-agent", user_agent);
@@ -96,7 +96,7 @@ fn configure_source(element: &gst::Element, source: &NativeOpenRequest) {
         if element.find_property("tls-database").is_some() {
             match gio::TlsFileDatabase::new(ca_file) {
                 Ok(database) => element.set_property("tls-database", database),
-                Err(error) => tracing::error!(%error, %ca_file, "failed to load TLS CA file"),
+                Err(_) => tracing::error!("failed to load configured TLS trust database"),
             }
         } else if element.find_property("ssl-ca-file").is_some() {
             element.set_property("ssl-ca-file", ca_file);
