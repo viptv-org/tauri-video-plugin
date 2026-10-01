@@ -133,6 +133,18 @@ mod tests {
         assert_eq!(diagnostics.platform, std::env::consts::OS);
     }
 
+    /// 'auto' clients pick the first advertised engine; it must be the same
+    /// engine Rust selects for an omitted backend.
+    #[cfg(all(feature = "gstreamer-runtime", any(target_os = "linux", windows)))]
+    #[test]
+    fn auto_engine_order_starts_with_the_default_gstreamer_backend() {
+        let diagnostics = super::native_diagnostics();
+        assert_eq!(
+            diagnostics.engines.first().map(String::as_str),
+            Some("gstreamer")
+        );
+    }
+
     #[test]
     fn native_open_requires_the_current_protocol() {
         assert!(

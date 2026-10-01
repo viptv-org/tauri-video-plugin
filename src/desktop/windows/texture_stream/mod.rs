@@ -9,12 +9,6 @@ mod webview2;
 
 pub use presenter::TextureStreamPresenter;
 pub use targets::DrawTarget;
-#[allow(unused_imports)]
-pub use webview2::{
-    ICoreWebView2ExperimentalEnvironment12, ICoreWebView2ExperimentalEnvironment12_Vtbl,
-    ICoreWebView2ExperimentalTexture, ICoreWebView2ExperimentalTexture_Vtbl,
-    ICoreWebView2ExperimentalTextureStream, ICoreWebView2ExperimentalTextureStream_Vtbl,
-};
 
 use d3d11::SendGstDevice;
 use webview2::SendStream;

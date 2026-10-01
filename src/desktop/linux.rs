@@ -69,18 +69,25 @@ pub fn stats(payload: NativeSessionRequest) -> Result<NativePlaybackSnapshot> {
 
 pub fn close(payload: NativeSessionRequest) -> Result<()> {
     let backend = active_backend()?;
-    // A close means the caller is finished with the native player. A key
-    // mismatch would mean the adapter and the engine desynchronized;
-    // leaving the engine running would leak playing audio, so the engine
-    // parks regardless of the presented key.
-    let result = match backend {
-        Backend::Gstreamer => super::linux_gstreamer::close(payload),
-        Backend::Mpv => super::linux_mpv::close(payload),
+    let released = match backend {
+        Backend::Gstreamer => super::linux_gstreamer::close(payload)?,
+        Backend::Mpv => super::linux_mpv::close(payload)?,
     };
-    if result.is_ok() {
+    if released {
         ACTIVE_BACKEND.with(|active| *active.borrow_mut() = None);
     }
-    result
+    Ok(())
+}
+
+/// Whether a close presented with `presented` releases an engine owned by
+/// `active`. The engine is a singleton: a newer `native_open` replaces the
+/// source and the owning key in place, so cleanup that arrives late from an
+/// older controller (an older React render or a superseded open) is a no-op.
+/// An engine that no session owns (parked, or a failed open that never
+/// assigned a key) is always released so it cannot keep playing unowned.
+#[cfg(any(feature = "gstreamer-runtime", feature = "mpv-runtime", test))]
+pub(super) fn close_releases(active: &str, presented: &str) -> bool {
+    active.is_empty() || active == presented
 }
 
 fn active_backend() -> Result<Backend> {
@@ -112,6 +119,14 @@ fn select_backend(requested: Option<&str>) -> Result<Backend> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_cleanup_with_a_stale_key_does_not_release_a_newer_session() {
+        assert!(close_releases("current", "current"));
+        assert!(!close_releases("current", "older"));
+        assert!(!close_releases("current", ""));
+        assert!(close_releases("", "older"));
+    }
 
     #[test]
     fn explicit_mobile_backend_is_rejected_on_linux() {

@@ -22,8 +22,8 @@ use crate::{
 
 mod session;
 
-pub use session::{close, control, force_close, layout, stats};
 use session::snapshot;
+pub use session::{close, control, force_close, layout, stats};
 
 static GST_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
@@ -166,9 +166,8 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
 
     let widget_object = gtk_sink.property::<gst::glib::Object>("widget");
     let widget_pointer: *mut gst::glib::gobject_ffi::GObject = widget_object.to_glib_none().0;
-    let widget: gtk::Widget = unsafe {
-        gtk::glib::translate::from_glib_none(widget_pointer as *mut gtk::ffi::GtkWidget)
-    };
+    let widget: gtk::Widget =
+        unsafe { gtk::glib::translate::from_glib_none(widget_pointer as *mut gtk::ffi::GtkWidget) };
     widget.set_hexpand(false);
     widget.set_vexpand(false);
     super::linux_surface::place_widget(
@@ -215,9 +214,8 @@ fn subtitle_safe_gtk_sink(gtk_sink: &gst::Element) -> Result<gst::Element> {
             return Ok(gtk_sink.clone());
         }
     };
-    let flattened_caps =
-        gst::Caps::from_str("video/x-raw(memory:GLMemory),format=(string)RGBA")
-            .map_err(|error| Error::Pipeline(error.to_string()))?;
+    let flattened_caps = gst::Caps::from_str("video/x-raw(memory:GLMemory),format=(string)RGBA")
+        .map_err(|error| Error::Pipeline(error.to_string()))?;
     let caps_filter = gst::ElementFactory::make("capsfilter")
         // Excluding GstVideoOverlayCompositionMeta here prevents
         // gloverlaycompositor passthrough. Captions are flattened into the

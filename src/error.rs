@@ -98,6 +98,35 @@ impl NativeMediaFailure {
     }
 }
 
+impl Serialize for Error {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireError<'a> {
+            code: &'static str,
+            message: String,
+            recoverable: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            stage: Option<&'a str>,
+        }
+
+        WireError {
+            code: self.code(),
+            message: self.to_string(),
+            recoverable: self.recoverable(),
+            stage: match self {
+                Self::ProtocolMismatch { .. } => Some("protocol"),
+                Self::Pipeline(_) => Some("pipeline"),
+                _ => None,
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,34 +163,5 @@ mod tests {
             assert_eq!(failure.code(), code);
             assert!(!format!("{failure:?}").contains("private.invalid"));
         }
-    }
-}
-
-impl Serialize for Error {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct WireError<'a> {
-            code: &'static str,
-            message: String,
-            recoverable: bool,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            stage: Option<&'a str>,
-        }
-
-        WireError {
-            code: self.code(),
-            message: self.to_string(),
-            recoverable: self.recoverable(),
-            stage: match self {
-                Self::ProtocolMismatch { .. } => Some("protocol"),
-                Self::Pipeline(_) => Some("pipeline"),
-                _ => None,
-            },
-        }
-        .serialize(serializer)
     }
 }

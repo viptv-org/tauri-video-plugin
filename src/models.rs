@@ -19,15 +19,16 @@ pub struct NativePluginDiagnostics {
 }
 
 /// The playback engines compiled into this build, in the order an 'auto'
-/// client should prefer them. Linux prefers mpv when its runtime was
-/// compiled; GStreamer serves both desktop platforms.
+/// client should prefer them. GStreamer is the primary engine on both
+/// desktop platforms and matches the Rust default for an omitted backend;
+/// mpv is an optional Linux runtime that must be requested explicitly.
 fn compiled_engines() -> Vec<String> {
     let mut engines = Vec::new();
-    if cfg!(all(target_os = "linux", feature = "mpv-runtime")) {
-        engines.push("mpv".into());
-    }
     if cfg!(feature = "gstreamer-runtime") && cfg!(any(target_os = "linux", windows)) {
         engines.push("gstreamer".into());
+    }
+    if cfg!(all(target_os = "linux", feature = "mpv-runtime")) {
+        engines.push("mpv".into());
     }
     engines
 }

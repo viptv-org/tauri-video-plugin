@@ -1,7 +1,4 @@
-use std::{
-    sync::atomic::Ordering,
-    time::Instant,
-};
+use std::{sync::atomic::Ordering, time::Instant};
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -156,8 +153,7 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
     let (live, seekable, seekable_start, seekable_end) =
         playback_timeline(&player.pipeline, duration);
     let buffered = position
-        + player.buffer_duration_seconds.unwrap_or(0.0) * player.buffering_percent as f64
-            / 100.0;
+        + player.buffer_duration_seconds.unwrap_or(0.0) * player.buffering_percent as f64 / 100.0;
     let buffered = if live {
         buffered.max(position)
     } else {
@@ -277,9 +273,7 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                         });
                     let codec = stream
                         .caps()
-                        .and_then(|caps| {
-                            caps.structure(0).map(|value| value.name().to_string())
-                        })
+                        .and_then(|caps| caps.structure(0).map(|value| value.name().to_string()))
                         .unwrap_or_default();
                     player.tracks.push(NativeTrackInfo {
                         id: id.clone(),

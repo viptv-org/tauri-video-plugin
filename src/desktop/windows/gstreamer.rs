@@ -22,8 +22,8 @@ use crate::{
 
 mod session;
 
-pub use session::{close, control, layout, stats};
 use session::snapshot;
+pub use session::{close, control, layout, stats};
 
 static GST_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 static PRESENTER: LazyLock<RwLock<Option<Arc<Mutex<texture_stream::TextureStreamPresenter>>>>> =
@@ -255,9 +255,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
     let first = if gpu_color_conversion {
         let convert = gst::ElementFactory::make("d3d11convert")
             .build()
-            .map_err(|error| {
-                Error::Pipeline(format!("d3d11convert is unavailable: {error}"))
-            })?;
+            .map_err(|error| Error::Pipeline(format!("d3d11convert is unavailable: {error}")))?;
         sink_bin
             .add_many([&upload, &convert, &video_sink])
             .and_then(|_| gst::Element::link_many([&upload, &convert, &video_sink]))
@@ -270,9 +268,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
     } else {
         let convert = gst::ElementFactory::make("videoconvert")
             .build()
-            .map_err(|error| {
-                Error::Pipeline(format!("videoconvert is unavailable: {error}"))
-            })?;
+            .map_err(|error| Error::Pipeline(format!("videoconvert is unavailable: {error}")))?;
         let system_caps = gst::Caps::builder("video/x-raw")
             .field("format", "NV12")
             .build();
@@ -282,9 +278,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
             .map_err(|error| Error::Pipeline(format!("capsfilter is unavailable: {error}")))?;
         sink_bin
             .add_many([&convert, &caps_filter, &upload, &video_sink])
-            .and_then(|_| {
-                gst::Element::link_many([&convert, &caps_filter, &upload, &video_sink])
-            })
+            .and_then(|_| gst::Element::link_many([&convert, &caps_filter, &upload, &video_sink]))
             .map_err(|error| {
                 Error::Pipeline(format!(
                     "could not build the software Windows video sink: {error}"

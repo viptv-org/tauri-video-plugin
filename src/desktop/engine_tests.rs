@@ -124,7 +124,7 @@ fn mp4_fixture() -> &'static Vec<u8> {
 fn mpv_engine_opens_stats_and_seeks_an_http_mp4() {
     let port = serve_fixture(mp4_fixture().clone()).expect("local HTTP fixture starts");
     let uri = format!("http://127.0.0.1:{port}/fixture.mp4");
-    let mpv = super::linux_mpv::create_engine(false).expect("mpv engine handle");
+    let mpv = super::linux_mpv::create_engine().expect("mpv engine handle");
     // No GL surface exists in cargo tests; the null output still runs the
     // demuxer and decoders, which is the failure domain under test. Audio is
     // likewise nulled: headless CI probes PipeWire/ALSA with no daemon and
@@ -167,7 +167,7 @@ fn mpv_engine_opens_stats_and_seeks_an_http_mp4() {
 fn mpv_engine_opens_at_the_requested_start_position() {
     let port = serve_fixture(mp4_fixture().clone()).expect("local HTTP fixture starts");
     let uri = format!("http://127.0.0.1:{port}/fixture.mp4");
-    let mpv = super::linux_mpv::create_engine(false).expect("mpv engine handle");
+    let mpv = super::linux_mpv::create_engine().expect("mpv engine handle");
     mpv.set_property("vo", "null".to_owned())
         .expect("null video output");
     mpv.set_property("pause", false).expect("autoplay");

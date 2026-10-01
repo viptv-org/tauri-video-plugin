@@ -2,10 +2,7 @@ use std::ffi::c_void;
 
 use windows::{
     core::{IUnknown, IUnknown_Vtbl, Interface, HRESULT, PCWSTR},
-    Win32::{
-        Foundation::HANDLE,
-        Graphics::Direct3D11::ID3D11Resource,
-    },
+    Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Resource},
 };
 
 #[derive(Clone)]

@@ -18,10 +18,11 @@ pub fn ensure_host<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         if slot.borrow().is_some() {
             return Ok(());
         }
-        let window =
-            app.webview_windows().into_values().next().ok_or_else(|| {
-                Error::Pipeline("no Tauri webview window is available".into())
-            })?;
+        let window = app
+            .webview_windows()
+            .into_values()
+            .next()
+            .ok_or_else(|| Error::Pipeline("no Tauri webview window is available".into()))?;
         // Native video is a sibling below WebKit, so only the WebView's
         // backing layer must be transparent. Do this at runtime instead of
         // requiring every consuming app to opt its whole OS window into
@@ -75,13 +76,7 @@ pub fn ensure_host<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     })
 }
 
-pub fn place_widget(
-    widget: &gtk::Widget,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<()> {
+pub fn place_widget(widget: &gtk::Widget, x: f64, y: f64, width: f64, height: f64) -> Result<()> {
     // Preserve negative positions. GtkFixed clips children against the
     // window, which is exactly what we need when an HTML anchor scrolls
     // partially above or left of the viewport. Clamping here pins the
