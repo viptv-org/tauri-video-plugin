@@ -1,87 +1,23 @@
 import { VIDEO_CONTROLS_ATTRIBUTE } from '@get-air/video/controls'
 
-import type { VisibleSurfaceBounds } from './native-surface-layout'
-import { ZERO_RADIUS_STYLES, type CornerRadiusStyles, type Rect } from './native-surface-geometry'
+import { ZERO_RADIUS_STYLES, type Rect } from './native-surface-geometry'
+import {
+  MASK_IMAGE_PROPERTY,
+  MASK_POSITION_PROPERTY,
+  MASK_SIZE_PROPERTY,
+  nativeCssSurfaceScope,
+  OCCLUDER_ATTRIBUTE,
+  type DrilledAncestor,
+  type NativeCssSurfaceState,
+} from './native-surface-model'
 import {
   applyBackground,
   commitOccluder,
   inlineProperty,
   readBackground,
   readCornerRadiusStyles,
-  restoreInlineProperty,
+  restoreOccluder,
 } from './native-surface-paint'
-
-export interface BackgroundPanel {
-  clip: HTMLDivElement
-  paint: HTMLDivElement
-}
-
-export interface DrilledAncestor {
-  element: HTMLElement
-  previousOwner: string | null
-  mirror: HTMLDivElement
-  panels: BackgroundPanel[]
-  clipsX: boolean
-  clipsY: boolean
-  borderLeft: number
-  borderTop: number
-  borderRight: number
-  borderBottom: number
-  radii: CornerRadiusStyles
-  paintsBackground: boolean
-}
-
-export interface BackgroundSnapshot {
-  properties: readonly [string, string][]
-  borderRadius: string
-  clipsX: boolean
-  clipsY: boolean
-  borderLeft: number
-  borderTop: number
-  borderRight: number
-  borderBottom: number
-  radii: CornerRadiusStyles
-  paintsBackground: boolean
-}
-
-export interface ClippedOccluder {
-  element: HTMLElement
-  owner: string
-  active: boolean
-  previousOwner: string | null
-  previousImage: InlinePropertySnapshot
-  previousPosition: InlinePropertySnapshot
-  previousSize: InlinePropertySnapshot
-}
-
-export interface InlinePropertySnapshot {
-  value: string
-  priority: string
-}
-
-export interface NativeCssSurfaceState {
-  owner: string
-  anchor: HTMLVideoElement
-  layer: HTMLDivElement
-  style: HTMLStyleElement
-  drilled: DrilledAncestor[]
-  rootHadClass: boolean
-  previousSession: string | undefined
-  anchorRadii: CornerRadiusStyles
-  occluders: ClippedOccluder[]
-  protectedElements: Set<HTMLElement>
-  lastBounds?: VisibleSurfaceBounds
-}
-
-export const nativeCssSurfaceScope = globalThis as typeof globalThis & {
-  __TAURI_VIDEO_NATIVE_CSS_SURFACE__?: NativeCssSurfaceState
-}
-
-export const committedStyleValues = new WeakMap<HTMLElement, Map<string, string>>()
-export const OCCLUDER_ATTRIBUTE = 'data-tauri-native-video-occluder'
-export const MASK_IMAGE_PROPERTY = '--tauri-native-video-mask-image'
-export const MASK_POSITION_PROPERTY = '--tauri-native-video-mask-position'
-export const MASK_SIZE_PROPERTY = '--tauri-native-video-mask-size'
 
 const NATIVE_VIDEO_CSS_PROPERTIES = [
   '--tauri-native-video-left',
@@ -267,18 +203,6 @@ function restoreAncestor(ancestor: DrilledAncestor, owner: string): void {
     else ancestor.element.setAttribute('data-tauri-native-video-hole', ancestor.previousOwner)
   }
   ancestor.mirror.remove()
-}
-
-export function restoreOccluder(occluder: ClippedOccluder): void {
-  if (!occluder.active) return
-  if (occluder.element.getAttribute(OCCLUDER_ATTRIBUTE) === occluder.owner) {
-    if (occluder.previousOwner === null) occluder.element.removeAttribute(OCCLUDER_ATTRIBUTE)
-    else occluder.element.setAttribute(OCCLUDER_ATTRIBUTE, occluder.previousOwner)
-  }
-  restoreInlineProperty(occluder.element, MASK_IMAGE_PROPERTY, occluder.previousImage)
-  restoreInlineProperty(occluder.element, MASK_POSITION_PROPERTY, occluder.previousPosition)
-  restoreInlineProperty(occluder.element, MASK_SIZE_PROPERTY, occluder.previousSize)
-  occluder.active = false
 }
 
 export function collectAncestors(anchor: HTMLElement): HTMLElement[] {

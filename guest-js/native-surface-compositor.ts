@@ -21,15 +21,17 @@ import {
 import {
   claimSurface,
   collectAncestors,
-  nativeCssSurfaceScope,
   rebuildAncestors,
   rebuildOccluders,
   rectFrom,
   refreshActiveOccluders,
   releaseSurface,
+} from './native-surface-state'
+import {
+  nativeCssSurfaceScope,
   type DrilledAncestor,
   type NativeCssSurfaceState,
-} from './native-surface-state'
+} from './native-surface-model'
 import {
   commitAncestor,
   commitOccluder,
