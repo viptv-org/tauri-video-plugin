@@ -1,21 +1,189 @@
 # Tauri video plugin specification
 
-## Purpose
+Derived from the code at the revision that carries this file. When code and this
+document disagree, the code is the bug report: fix one so they match.
 
-`viptv-org/tauri-video-plugin` is the desktop-native adapter for the shared VIPTV TypeScript video controller. It maps controller operations to Tauri-native playback without imposing a native UI.
+## Purpose and ownership
 
-## Interface
+`viptv-org/tauri-video-plugin` adapts platform-native playback engines to
+Tauri. It exposes playback facts and commands over IPC; it never draws VIPTV
+controls, overlays or focus.
 
-The React application attaches a normal video element through the controller, chooses `tauri` explicitly, and supplies its source and policy. The plugin provides playback, volume, tracks, custom headers, live/DVR state, source replacement, and typed unsupported-feature failures.
+- **UX authority** is the [`viptv-org/design`](https://github.com/viptv-org/design)
+  repository (pinned in `DESIGN_REF`) and its design canvas. Controls,
+  shortcuts, focus, pause/resume, source picker, up-next and next-episode
+  behavior live in the React application.
+- **Controller authority** is [`viptv-org/video`](https://github.com/viptv-org/video):
+  its `TauriNativeAdapter` (`src/tauri-native.ts`) drives the raw
+  `plugin:video|native_*` IPC commands described below and implements the
+  shared `Player` contract. VIPTV uses that adapter.
+- **JavaScript façade.** `adapter/`, `guest-js/` and `examples/` are this
+  plugin's own public JavaScript API (`@viptv/video-tauri`, wrapping the
+  upstream `@get-air/video` peer). VIPTV does not use it; it is kept as the
+  plugin's standalone API and must stay consistent with the Rust protocol.
 
-## Platform behavior
+## IPC protocol
 
-Linux uses GStreamer by default, with MPV an optional runtime. Windows uses its native texture path. Android support remains inherited for consumers that embed the plugin, but the VIPTV desktop app targets desktop Tauri. The plugin does not claim universal codec, HDR, DRM, or UHD support.
+`VIDEO_PLUGIN_PROTOCOL_VERSION = 1` (`src/models.rs`). Commands (all under
+`plugin:video|`):
 
-## UX boundary
+| Command | Payload | Result |
+| --- | --- | --- |
+| `native_diagnostics` | none | `{protocolVersion, crateName, crateVersion, platform, engines[]}` |
+| `native_prepare_texture_stream` | `sessionKey` | WebView2 stream id (Windows only) |
+| `native_open` | `NativeOpenRequest` | `NativePlaybackSnapshot` |
+| `native_control` | `{sessionKey, action, value, index}` | `NativePlaybackSnapshot` |
+| `native_layout` | `{sessionKey, x, y, width, height, scrollX, scrollY}` | none |
+| `native_stats` | `{sessionKey}` | `NativePlaybackSnapshot` |
+| `native_close` | `{sessionKey}` | none |
 
-The design repository is authoritative for controls, shortcuts, focus, pause/resume, source picker, up-next, and next-episode behavior. The plugin only exposes playback facts and commands.
+Handshake: a client calls `native_diagnostics` first and refuses to continue
+unless `protocolVersion` equals its own. `native_open` additionally requires
+`protocolVersion == 1` and a non-empty `packageVersion`; otherwise it fails with
+`PROTOCOL_MISMATCH` (stage `protocol`). Additive diagnostic or capability
+fields do not change the protocol number; incompatible command, payload,
+response or error-shape changes do (see `VERSIONING.md`).
+
+`native_control` actions: `play`, `pause`, `seek` (`value` seconds), `volume`
+(`value` 0..1), `track` / `deselectTrack` (`index` from the snapshot's
+`tracks`), and the fit modes `fit`, `crop`, `stretch` (plus `zoom` on mpv; the
+Windows engine accepts the fit modes as no-ops). Any other action is
+`INVALID_REQUEST`.
+
+## Backend selection
+
+The engine is chosen explicitly; there is no silent substitution.
+
+- `native_diagnostics.engines` lists the engines compiled into this build in
+  the order an `auto` client must prefer them. **GStreamer is first** whenever
+  `gstreamer-runtime` is compiled (Linux and Windows); `mpv` follows on Linux
+  when `mpv-runtime` is compiled. This order matches the Rust default.
+- `NativeOpenRequest.backend` omitted → the platform default: GStreamer.
+  On Linux without `gstreamer-runtime` an omitted backend is
+  `RUNTIME_UNAVAILABLE`; `mpv` must then be requested explicitly.
+- An explicit backend that was not compiled fails with `RUNTIME_UNAVAILABLE`
+  (`gstreamer`/`mpv` on Linux; `mpv` on Windows, where it is not implemented).
+  An unknown backend name is `INVALID_REQUEST`. Clients must surface the error,
+  not fall back to another engine.
+- Linux keeps one active backend. Switching backends force-closes the previous
+  engine first; if the replacement fails, controls are no longer routed to the
+  stale backend.
+
+## Source replacement and session ownership
+
+The native player is a singleton per process (one GStreamer or mpv player, one
+native surface).
+
+- **Session key.** Every `native_open` carries a `sessionKey` generated by the
+  JavaScript controller. Control, layout and stats calls must present the key
+  of the session that currently owns the engine; a different key fails with
+  `INVALID_REQUEST` ("session is stale").
+- **Same-slot reload.** A `native_open` while a player exists replaces the
+  source in place (pipeline parked to READY, or mpv `stop` + `loadfile
+  replace`) and adopts the new key. The GTK GL sink/area and widget are kept
+  alive across source changes (recreating them can invalidate the WebKit or
+  EGL composited layer on Wayland). On Windows a texture presenter generation
+  change rebuilds the player instead.
+- **Late-cleanup guard.** `native_close` releases the engine only when the
+  presented key owns it, or when no session owns it (a parked engine or a
+  failed open that never assigned a key). Cleanup that arrives late from an
+  older controller — an older React render or a superseded open — is a no-op
+  and never parks the newer session. Released engines are parked (READY /
+  `stop`, widget hidden), not destroyed.
+- **Validate before teardown.** `native_open` verifies the protocol and the
+  source authorization (below), and Linux resolves the requested backend,
+  before the current player is touched. An invalid request therefore never
+  stops the playing session.
+
+## Source authorization and header validation
+
+`NativeOpenRequest` carries `headers`, `cookies`, `userAgent`, `referrer` and
+`tlsCaFile`. `validate_authorization` (`src/models.rs`) rejects the whole
+request with `INVALID_REQUEST` ("Invalid source authorization") when:
+
+- there are more than 32 headers;
+- a header name is empty, longer than 128 bytes, or contains anything other
+  than ASCII letters, digits and `-`;
+- two header names are equal ignoring ASCII case;
+- a header name is hop-by-hop or transport-owned: `host`, `connection`,
+  `content-length`, `transfer-encoding`, `proxy-authorization`, `upgrade`,
+  `keep-alive`, `te`, `trailer`;
+- any header value, cookie, user agent or referrer is longer than 8192 bytes or
+  contains a control character (CR/LF injection);
+- the `cookies`, `userAgent` or `referrer` property conflicts with a header of
+  the same meaning (`Cookie`, `User-Agent`, `Referer`) carrying a different
+  value.
+
+Engines apply the validated values: GStreamer sets `user-agent`, `cookies`,
+`extra-headers` (adding `Referer` when not already a header) and a 60 s
+`timeout` on HTTP sources; mpv sets `http-header-fields` (cookie and referrer
+folded in), `user-agent` (default `tauri-plugin-video`) and `tls-ca-file`.
+
+## Snapshots, tracks and live/DVR
+
+`NativePlaybackSnapshot` reports `durationSeconds`, `currentTimeSeconds`,
+`bufferedSeconds`, `playing`, `videoWidth`/`videoHeight`, frame counters
+(`presentedFrames`, `droppedFrames`, `measuredFps`), `hardwareBackend`,
+`backend` (the engine actually serving the session) and buffer statistics.
+
+- **Tracks** are independent: each `NativeTrackInfo` has `id`, `index`, `kind`
+  (`video` | `audio` | `subtitle`), `language`, `label`, `codec`, `selected`.
+  Audio and subtitle selection use `track` / `deselectTrack` by `index`.
+- **Live/DVR.** `live` is true when the engine reports no duration, or (GStreamer)
+  when the latency query reports a live pipeline. `seekable`,
+  `seekableStartSeconds` and `seekableEndSeconds` describe the window the engine
+  can actually serve; mpv may report an unseekable source with a demuxer-cache
+  window. Clients must refuse seeks outside that window rather than dispatch
+  them.
+
+## Typed errors
+
+Every command error serializes as `{code, message, recoverable, stage?}`
+(`src/error.rs`). Messages are fixed, safe strings; runtime details (URLs,
+headers, cookies, paths, engine debug output) are never serialized, displayed
+or included in `Debug` output.
+
+| Code | Meaning | Recoverable | Stage |
+| --- | --- | --- | --- |
+| `PROTOCOL_MISMATCH` | client/plugin protocol or package metadata mismatch | no | `protocol` |
+| `INVALID_REQUEST` | malformed request, stale session key, rejected authorization, unknown backend/action | no | — |
+| `RUNTIME_UNAVAILABLE` | requested engine not compiled or its runtime failed to initialize | no | — |
+| `PIPELINE_FAILED` | the engine could not demux/decode this delivery, or the native UI dispatcher failed/timed out (15 s) | yes | `pipeline` |
+| `AUTHORIZATION_FAILED` | the origin refused authorization (GStreamer `NotAuthorized`) | no | — |
+| `CONNECTION_FAILED` | the origin could not be read (`OpenRead`, `Read`, `Close`, `Busy`, …) | yes | — |
+| `SOURCE_UNAVAILABLE` | the source is missing or expired (`NotFound`) | no | — |
+| `MOBILE_PLUGIN_ERROR` | Android plugin invocation failed | no | — |
+
+## Runtime capability limits
+
+The plugin never claims universal codec, HDR, DRM or UHD support; those are
+runtime facts of the installed engine and hardware.
+
+- **Linux:** GStreamer `playbin3` into a `gtkglsink` GTK widget placed below a
+  transparent WebView aperture (default), or libmpv rendering into a
+  `GtkGLArea` (`mpv-runtime`, explicit). TLS trust: `tlsCaFile` loads a GIO
+  file database on GStreamer (a load failure is logged and the system trust is
+  kept) and maps to mpv `tls-ca-file`.
+- **Windows:** GStreamer with D3D11 decoding presented as a WebView2 texture
+  stream on the real `<video>` element. `native_prepare_texture_stream` must
+  succeed before `native_open` (otherwise `PIPELINE_FAILED`); the plugin enables
+  the `msWebView2TextureStream` WebView2 feature in `Builder::build`. mpv is refused.
+- **Android:** Media3 through the Android plugin (`openNative`, …). Buffer
+  durations (`minBufferMs`, `playbackBufferMs`, `rebufferMs`), `decoderFallback`,
+  `dolbyVisionMode` and `tunneling` apply only there.
+- **Buffering:** `maxBufferMs` is clamped to 3–120 s on desktop engines;
+  `targetBufferBytes` is clamped to at least 4 MiB on GStreamer and maps to the
+  demuxer cache on mpv. Omitted values keep engine defaults.
+- **Diagnostics:** `native_diagnostics` reports protocol, crate name/version,
+  OS and compiled engines only. Engine diagnostics go through `tracing`
+  (`debug`/`trace` for telemetry, `warn`/`error` for failures) and never
+  include source URLs, headers, cookies, licenses or local paths.
 
 ## Acceptance
 
-Run TypeScript checks/build and Rust tests. Verify the target native engine on its host for video surface attachment, source replacement, tracks, subtitles, live/DVR seeking, and error mapping.
+Locally: `npm run check`, `npm run build`, `cargo fmt --all -- --check`,
+`cargo clippy --all-targets --all-features -- -D warnings`, and
+`cargo test --all-features` / `--no-default-features` (Linux engine tests decode
+a real MP4 over a local HTTP server through open → stats → seek → close).
+On the target host, verify surface attachment, source replacement, late-cleanup
+safety, tracks, subtitles, live/DVR seeking and error mapping.
