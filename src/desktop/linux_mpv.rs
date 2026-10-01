@@ -8,9 +8,7 @@ use std::{
 use gtk::prelude::*;
 use libmpv2::{
     events::mpv_event_id,
-    render::{
-        mpv_render_update, OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType,
-    },
+    render::{mpv_render_update, OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType},
     Mpv,
 };
 use tauri::{AppHandle, Runtime};
@@ -23,7 +21,9 @@ use crate::{
 mod session;
 
 pub use session::{close, control, force_close, layout, stats};
-use session::{encode_mpv_list, mpv_error, open_gl_proc_address, property, schedule_layout_render, snapshot};
+use session::{
+    encode_mpv_list, mpv_error, open_gl_proc_address, property, schedule_layout_render, snapshot,
+};
 
 #[link(name = "GL")]
 unsafe extern "C" {
@@ -115,13 +115,9 @@ pub fn open<R: Runtime>(
             return snapshot(player);
         }
         let mut player = create_player(&payload)?;
-        if std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some() {
-            eprintln!("mpv init: collecting initial snapshot");
-        }
+        tracing::debug!("mpv init: collecting initial snapshot");
         let result = snapshot(&mut player)?;
-        if std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some() {
-            eprintln!("mpv init: initial snapshot complete");
-        }
+        tracing::debug!("mpv init: initial snapshot complete");
         *slot = Some(player);
         Ok(result)
     })
@@ -130,7 +126,7 @@ pub fn open<R: Runtime>(
 /// The libmpv engine handle with the embedded player's production
 /// options. Separated from the surface binding so engine-level tests can
 /// drive the same handle configuration without a GL area.
-pub(super) fn create_engine(trace: bool) -> Result<Mpv> {
+pub(super) fn create_engine() -> Result<Mpv> {
     let mpv = Mpv::with_initializer(|init| {
         init.set_option("vo", "libmpv")?;
         init.set_option("hwdec", "auto-safe")?;
@@ -147,19 +143,14 @@ pub(super) fn create_engine(trace: bool) -> Result<Mpv> {
         Ok(())
     })
     .map_err(mpv_error)?;
-    if trace {
-        eprintln!("mpv init: handle ready");
-    }
+    tracing::debug!("mpv init: handle ready");
     mpv.disable_deprecated_events().map_err(mpv_error)?;
     mpv.disable_event(mpv_event_id::Tick).map_err(mpv_error)?;
     Ok(mpv)
 }
 
 fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
-    let trace = std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some();
-    if trace {
-        eprintln!("mpv init: begin");
-    }
+    tracing::debug!("mpv init: begin");
     // libmpv parses floating-point options through the C locale and rejects
     // process locales whose decimal separator is not `.`. This is its
     // documented embedding precondition and is set before the handle exists.
@@ -200,11 +191,9 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
             "could not create the mpv OpenGL surface: {error}"
         )));
     }
-    if trace {
-        eprintln!("mpv init: GL area ready");
-    }
+    tracing::debug!("mpv init: GL area ready");
 
-    let mut mpv = create_engine(trace)?;
+    let mut mpv = create_engine()?;
     let default_buffer = MpvBufferDefaults::read(&mpv);
 
     let mut context = RenderContext::new(
@@ -218,9 +207,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
         ],
     )
     .map_err(mpv_error)?;
-    if trace {
-        eprintln!("mpv init: render context ready");
-    }
+    tracing::debug!("mpv init: render context ready");
 
     #[allow(deprecated)]
     let (redraw_sender, redraw_receiver) =
@@ -245,7 +232,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
                 update_area.queue_render();
             }
             Ok(_) => {}
-            Err(error) => eprintln!("mpv render update error: {error}"),
+            Err(error) => tracing::warn!(%error, "mpv render update error"),
         }
         gtk::glib::ControlFlow::Continue
     });
@@ -278,15 +265,13 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
         match rendered {
             Ok(()) => frames_for_render.set(frames_for_render.get().saturating_add(1)),
             Err(error) => {
-                eprintln!("mpv render error: {error}");
+                tracing::warn!(%error, "mpv render error");
                 *error_for_render.borrow_mut() = Some(error);
             }
         }
         gtk::glib::Propagation::Stop
     });
-    if trace {
-        eprintln!("mpv init: GTK render callbacks ready");
-    }
+    tracing::debug!("mpv init: GTK render callbacks ready");
     // The render update callback is installed before GTK's render signal;
     // request the bootstrap frame explicitly so mpv cannot wait forever
     // for a consumer after its immediate callback races this connection.
@@ -313,13 +298,9 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
         default_buffer,
         error: render_error,
     };
-    if trace {
-        eprintln!("mpv init: loading source");
-    }
+    tracing::debug!("mpv init: loading source");
     load_source(&mut player, payload)?;
-    if trace {
-        eprintln!("mpv init: source command complete");
-    }
+    tracing::debug!("mpv init: source command complete");
     Ok(player)
 }
 

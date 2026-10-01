@@ -13,6 +13,7 @@ pub(crate) async fn native_open<R: Runtime>(
     payload: NativeOpenRequest,
 ) -> Result<NativePlaybackSnapshot> {
     require_native_protocol(payload.protocol_version, payload.package_version.as_deref())?;
+    payload.validate_authorization()?;
     #[cfg(mobile)]
     {
         return app.video().mobile().open_native(payload);
@@ -130,6 +131,18 @@ mod tests {
         assert_eq!(diagnostics.crate_name, env!("CARGO_PKG_NAME"));
         assert_eq!(diagnostics.crate_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(diagnostics.platform, std::env::consts::OS);
+    }
+
+    /// 'auto' clients pick the first advertised engine; it must be the same
+    /// engine Rust selects for an omitted backend.
+    #[cfg(all(feature = "gstreamer-runtime", any(target_os = "linux", windows)))]
+    #[test]
+    fn auto_engine_order_starts_with_the_default_gstreamer_backend() {
+        let diagnostics = super::native_diagnostics();
+        assert_eq!(
+            diagnostics.engines.first().map(String::as_str),
+            Some("gstreamer")
+        );
     }
 
     #[test]

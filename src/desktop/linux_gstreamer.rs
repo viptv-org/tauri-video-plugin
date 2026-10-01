@@ -22,8 +22,8 @@ use crate::{
 
 mod session;
 
-pub use session::{close, control, force_close, layout, stats};
 use session::snapshot;
+pub use session::{close, control, force_close, layout, stats};
 
 static GST_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
@@ -41,7 +41,7 @@ struct NativePlayer {
     buffer_duration_seconds: Option<f64>,
     target_buffer_bytes: Option<u64>,
     desired_playing: bool,
-    error: Option<String>,
+    error: Option<crate::error::NativeMediaFailure>,
     last_rendered: u64,
     last_sample_at: Instant,
     measured_fps: f64,
@@ -77,7 +77,7 @@ fn initialize_gstreamer() -> Result<()> {
         .map_err(Error::RuntimeUnavailable)
 }
 
-fn configure_source(element: &gst::Element, source: &NativeOpenRequest) {
+pub(super) fn configure_source(element: &gst::Element, source: &NativeOpenRequest) {
     if let Some(user_agent) = source.user_agent.as_deref() {
         if element.find_property("user-agent").is_some() {
             element.set_property("user-agent", user_agent);
@@ -96,7 +96,7 @@ fn configure_source(element: &gst::Element, source: &NativeOpenRequest) {
         if element.find_property("tls-database").is_some() {
             match gio::TlsFileDatabase::new(ca_file) {
                 Ok(database) => element.set_property("tls-database", database),
-                Err(error) => tracing::error!(%error, %ca_file, "failed to load TLS CA file"),
+                Err(_) => tracing::error!("failed to load configured TLS trust database"),
             }
         } else if element.find_property("ssl-ca-file").is_some() {
             element.set_property("ssl-ca-file", ca_file);
@@ -166,9 +166,8 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
 
     let widget_object = gtk_sink.property::<gst::glib::Object>("widget");
     let widget_pointer: *mut gst::glib::gobject_ffi::GObject = widget_object.to_glib_none().0;
-    let widget: gtk::Widget = unsafe {
-        gtk::glib::translate::from_glib_none(widget_pointer as *mut gtk::ffi::GtkWidget)
-    };
+    let widget: gtk::Widget =
+        unsafe { gtk::glib::translate::from_glib_none(widget_pointer as *mut gtk::ffi::GtkWidget) };
     widget.set_hexpand(false);
     widget.set_vexpand(false);
     super::linux_surface::place_widget(
@@ -215,9 +214,8 @@ fn subtitle_safe_gtk_sink(gtk_sink: &gst::Element) -> Result<gst::Element> {
             return Ok(gtk_sink.clone());
         }
     };
-    let flattened_caps =
-        gst::Caps::from_str("video/x-raw(memory:GLMemory),format=(string)RGBA")
-            .map_err(|error| Error::Pipeline(error.to_string()))?;
+    let flattened_caps = gst::Caps::from_str("video/x-raw(memory:GLMemory),format=(string)RGBA")
+        .map_err(|error| Error::Pipeline(error.to_string()))?;
     let caps_filter = gst::ElementFactory::make("capsfilter")
         // Excluding GstVideoOverlayCompositionMeta here prevents
         // gloverlaycompositor passthrough. Captions are flattened into the

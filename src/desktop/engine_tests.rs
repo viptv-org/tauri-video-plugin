@@ -12,7 +12,15 @@ use gstreamer::prelude::*;
 /// A single-file HTTP server on an ephemeral port. libmpv and playbin3
 /// open sequential connections and may request ranges; both are honoured
 /// so the engines exercise real seeking I/O.
+#[cfg(feature = "mpv-runtime")]
 fn serve_fixture(file: Vec<u8>) -> std::io::Result<u16> {
+    serve_fixture_with_headers(file, &[])
+}
+
+fn serve_fixture_with_headers(
+    file: Vec<u8>,
+    required: &'static [(&'static str, &'static str)],
+) -> std::io::Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     std::thread::spawn(move || {
@@ -24,6 +32,18 @@ fn serve_fixture(file: Vec<u8>) -> std::io::Result<u16> {
                 continue;
             };
             let request = String::from_utf8_lossy(&request[..read]).to_string();
+            if !required.iter().all(|(name, value)| {
+                request.lines().any(|line| {
+                    line.split_once(':').is_some_and(|(key, actual)| {
+                        key.eq_ignore_ascii_case(name) && actual.trim() == *value
+                    })
+                })
+            }) {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                continue;
+            }
             let range = request
                 .lines()
                 .find(|line| line.to_ascii_lowercase().starts_with("range:"))
@@ -104,7 +124,7 @@ fn mp4_fixture() -> &'static Vec<u8> {
 fn mpv_engine_opens_stats_and_seeks_an_http_mp4() {
     let port = serve_fixture(mp4_fixture().clone()).expect("local HTTP fixture starts");
     let uri = format!("http://127.0.0.1:{port}/fixture.mp4");
-    let mpv = super::linux_mpv::create_engine(false).expect("mpv engine handle");
+    let mpv = super::linux_mpv::create_engine().expect("mpv engine handle");
     // No GL surface exists in cargo tests; the null output still runs the
     // demuxer and decoders, which is the failure domain under test. Audio is
     // likewise nulled: headless CI probes PipeWire/ALSA with no daemon and
@@ -147,7 +167,7 @@ fn mpv_engine_opens_stats_and_seeks_an_http_mp4() {
 fn mpv_engine_opens_at_the_requested_start_position() {
     let port = serve_fixture(mp4_fixture().clone()).expect("local HTTP fixture starts");
     let uri = format!("http://127.0.0.1:{port}/fixture.mp4");
-    let mpv = super::linux_mpv::create_engine(false).expect("mpv engine handle");
+    let mpv = super::linux_mpv::create_engine().expect("mpv engine handle");
     mpv.set_property("vo", "null".to_owned())
         .expect("null video output");
     mpv.set_property("pause", false).expect("autoplay");
@@ -183,14 +203,68 @@ fn mpv_engine_opens_at_the_requested_start_position() {
 
 #[cfg(feature = "gstreamer-runtime")]
 #[test]
+fn gstreamer_http_authorization_failure_has_a_safe_typed_cause() {
+    let port = serve_fixture_with_headers(
+        mp4_fixture().clone(),
+        &[("Authorization", "Bearer required-fixture")],
+    )
+    .unwrap();
+    gst::init().unwrap();
+    let pipeline = gst::ElementFactory::make("playbin3").build().unwrap();
+    pipeline.set_property(
+        "uri",
+        format!("http://127.0.0.1:{port}/fixture.mp4?private-token"),
+    );
+    for property in ["video-sink", "audio-sink"] {
+        pipeline.set_property(
+            property,
+            gst::ElementFactory::make("fakesink").build().unwrap(),
+        );
+    }
+    let _ = pipeline.set_state(gst::State::Playing);
+    let message = pipeline
+        .bus()
+        .unwrap()
+        .timed_pop_filtered(gst::ClockTime::from_seconds(5), &[gst::MessageType::Error])
+        .expect("HTTP authorization failure reaches bus");
+    let gst::MessageView::Error(error) = message.view() else {
+        panic!("Expected media error")
+    };
+    let failure = crate::error::NativeMediaFailure::from_gstreamer(&error.error()).into_error();
+    pipeline.set_state(gst::State::Null).unwrap();
+    assert_eq!(failure.code(), "AUTHORIZATION_FAILED");
+    assert!(!serde_json::to_string(&failure)
+        .unwrap()
+        .contains("private-token"));
+}
+
+#[cfg(feature = "gstreamer-runtime")]
+#[test]
 fn gstreamer_engine_opens_stats_and_seeks_an_http_mp4() {
-    let port = serve_fixture(mp4_fixture().clone()).expect("local HTTP fixture starts");
+    let port = serve_fixture_with_headers(
+        mp4_fixture().clone(),
+        &[
+            ("Authorization", "Bearer fixture-only"),
+            ("Referer", "https://fixture.invalid/watch"),
+            ("User-Agent", "Native Fixture"),
+            ("Cookie", "session=fixture-only"),
+        ],
+    )
+    .expect("local HTTP fixture starts");
     let uri = format!("http://127.0.0.1:{port}/fixture.mp4");
     gst::init().expect("GStreamer initializes");
     let pipeline = gst::ElementFactory::make("playbin3")
         .build()
         .expect("playbin3 pipeline");
     pipeline.set_property("uri", uri);
+    let authorization: crate::models::NativeOpenRequest = serde_json::from_value(serde_json::json!({"uri":"http://fixture.invalid/movie","x":0,"y":0,"width":100,"height":100,"headers":{"Authorization":"Bearer fixture-only","Referer":"https://fixture.invalid/watch"},"cookies":"session=fixture-only","userAgent":"Native Fixture"})).unwrap();
+    authorization.validate_authorization().unwrap();
+    pipeline.connect("source-setup", false, move |values| {
+        if let Ok(element) = values[1].get::<gst::Element>() {
+            super::linux_gstreamer::configure_source(&element, &authorization);
+        }
+        None
+    });
     // No app surface exists in cargo tests; unembedded sinks keep the
     // decode chain running exactly as the embedded pipeline does.
     for (property, name) in [("video-sink", "fakesink"), ("audio-sink", "fakesink")] {

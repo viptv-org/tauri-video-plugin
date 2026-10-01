@@ -22,8 +22,8 @@ use crate::{
 
 mod session;
 
-pub use session::{close, control, layout, stats};
 use session::snapshot;
+pub use session::{close, control, layout, stats};
 
 static GST_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 static PRESENTER: LazyLock<RwLock<Option<Arc<Mutex<texture_stream::TextureStreamPresenter>>>>> =
@@ -44,7 +44,7 @@ struct NativePlayer {
     buffer_duration_seconds: Option<f64>,
     target_buffer_bytes: Option<u64>,
     desired_playing: bool,
-    error: Option<String>,
+    error: Option<crate::error::NativeMediaFailure>,
     last_rendered: u64,
     last_sample_at: Instant,
     measured_fps: f64,
@@ -152,7 +152,7 @@ fn configure_source(element: &gst::Element, source: &NativeOpenRequest) {
         if element.find_property("tls-database").is_some() {
             match gio::TlsFileDatabase::new(ca_file) {
                 Ok(database) => element.set_property("tls-database", database),
-                Err(error) => tracing::error!(%error, %ca_file, "failed to load TLS CA file"),
+                Err(_) => tracing::error!("failed to load configured TLS trust database"),
             }
         } else if element.find_property("ssl-ca-file").is_some() {
             element.set_property("ssl-ca-file", ca_file);
@@ -255,9 +255,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
     let first = if gpu_color_conversion {
         let convert = gst::ElementFactory::make("d3d11convert")
             .build()
-            .map_err(|error| {
-                Error::Pipeline(format!("d3d11convert is unavailable: {error}"))
-            })?;
+            .map_err(|error| Error::Pipeline(format!("d3d11convert is unavailable: {error}")))?;
         sink_bin
             .add_many([&upload, &convert, &video_sink])
             .and_then(|_| gst::Element::link_many([&upload, &convert, &video_sink]))
@@ -270,9 +268,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
     } else {
         let convert = gst::ElementFactory::make("videoconvert")
             .build()
-            .map_err(|error| {
-                Error::Pipeline(format!("videoconvert is unavailable: {error}"))
-            })?;
+            .map_err(|error| Error::Pipeline(format!("videoconvert is unavailable: {error}")))?;
         let system_caps = gst::Caps::builder("video/x-raw")
             .field("format", "NV12")
             .build();
@@ -282,9 +278,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
             .map_err(|error| Error::Pipeline(format!("capsfilter is unavailable: {error}")))?;
         sink_bin
             .add_many([&convert, &caps_filter, &upload, &video_sink])
-            .and_then(|_| {
-                gst::Element::link_many([&convert, &caps_filter, &upload, &video_sink])
-            })
+            .and_then(|_| gst::Element::link_many([&convert, &caps_filter, &upload, &video_sink]))
             .map_err(|error| {
                 Error::Pipeline(format!(
                     "could not build the software Windows video sink: {error}"

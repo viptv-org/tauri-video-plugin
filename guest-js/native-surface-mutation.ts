@@ -1,6 +1,6 @@
 import { VIDEO_CONTROLS_ATTRIBUTE } from '@get-air/video/controls'
 
-import type { NativeCssSurfaceState } from './native-surface-state'
+import type { NativeCssSurfaceState } from './native-surface-model'
 
 export function stylesheetMutation(record: MutationRecord): boolean {
   if (record.target instanceof HTMLStyleElement) return true

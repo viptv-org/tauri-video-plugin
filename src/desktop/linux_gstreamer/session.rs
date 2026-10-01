@@ -114,10 +114,19 @@ pub fn stats(payload: NativeSessionRequest) -> Result<NativePlaybackSnapshot> {
     })
 }
 
-pub fn close(_payload: NativeSessionRequest) -> Result<()> {
-    // A close means the caller is finished with the native player; park
-    // regardless of the presented key so audio cannot leak.
-    park_player()
+/// Parks the engine when the presented key owns it, or when no session owns
+/// it. Returns whether the engine was released. Late cleanup from an older
+/// controller (a stale key) must not park a newer player's session.
+pub fn close(payload: NativeSessionRequest) -> Result<bool> {
+    let releases = PLAYER.with(|slot| {
+        slot.borrow().as_ref().is_none_or(|player| {
+            crate::desktop::linux::close_releases(&player.session_key, &payload.session_key)
+        })
+    });
+    if releases {
+        park_player()?;
+    }
+    Ok(releases)
 }
 
 pub fn force_close() -> Result<()> {
@@ -168,8 +177,7 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
     let (live, seekable, seekable_start, seekable_end) =
         playback_timeline(&player.pipeline, duration);
     let buffered = position
-        + player.buffer_duration_seconds.unwrap_or(0.0) * player.buffering_percent as f64
-            / 100.0;
+        + player.buffer_duration_seconds.unwrap_or(0.0) * player.buffering_percent as f64 / 100.0;
     let buffered = if live {
         buffered.max(position)
     } else {
@@ -189,12 +197,13 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
         player.measured_fps = rendered.saturating_sub(player.last_rendered) as f64 / elapsed;
         player.last_rendered = rendered;
         player.last_sample_at = now;
-        if std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some() {
-            eprintln!(
-                "video telemetry: presented={rendered} dropped={dropped} fps={:.2} position={position:.2}s",
-                player.measured_fps,
-            );
-        }
+        tracing::trace!(
+            presented = rendered,
+            dropped,
+            fps = player.measured_fps,
+            position_seconds = position,
+            "GStreamer playback telemetry"
+        );
     }
     let (video_width, video_height) = player
         .gtk_sink
@@ -293,9 +302,7 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                         });
                     let codec = stream
                         .caps()
-                        .and_then(|caps| {
-                            caps.structure(0).map(|value| value.name().to_string())
-                        })
+                        .and_then(|caps| caps.structure(0).map(|value| value.name().to_string()))
                         .unwrap_or_default();
                     player.tracks.push(NativeTrackInfo {
                         id: id.clone(),
@@ -307,9 +314,7 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                         selected: player.selected_streams.contains(&id),
                     });
                 }
-                if std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some() {
-                    eprintln!("video streams discovered: {}", player.tracks.len());
-                }
+                tracing::debug!(count = player.tracks.len(), "GStreamer streams discovered");
             }
             gst::MessageView::StreamsSelected(message) => {
                 player.selected_streams = message
@@ -319,21 +324,21 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                 for track in &mut player.tracks {
                     track.selected = player.selected_streams.contains(&track.id);
                 }
-                if std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some() {
-                    eprintln!("video streams selected: {}", player.selected_streams.len());
-                }
+                tracing::debug!(
+                    count = player.selected_streams.len(),
+                    "GStreamer streams selected"
+                );
             }
             gst::MessageView::Error(error) => {
-                let message =
-                    format!("{}: {}", error.error(), error.debug().unwrap_or_default());
-                player.error = Some(message.clone());
-                return Err(Error::Pipeline(message));
+                let failure = crate::error::NativeMediaFailure::from_gstreamer(&error.error());
+                player.error = Some(failure);
+                return Err(failure.into_error());
             }
             _ => {}
         }
     }
-    if let Some(error) = player.error.clone() {
-        return Err(Error::Pipeline(error));
+    if let Some(error) = player.error {
+        return Err(error.into_error());
     }
     Ok(())
 }

@@ -16,7 +16,7 @@ use crate::{
     Error, Result,
 };
 
-use super::{glXGetProcAddressARB, MpvPlayer, PLAYER, TrackTarget};
+use super::{glXGetProcAddressARB, MpvPlayer, TrackTarget, PLAYER};
 
 pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> {
     PLAYER.with(|slot| {
@@ -87,10 +87,11 @@ pub fn layout(payload: NativeLayoutRequest) -> Result<()> {
         let elapsed = now
             .duration_since(player.layout_sample_at.get())
             .as_secs_f64();
-        if elapsed >= 0.5 && std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some() {
-            eprintln!(
-                "mpv layout telemetry: commits={commits} rate={:.1} Hz",
-                commits as f64 / elapsed
+        if elapsed >= 0.5 {
+            tracing::trace!(
+                commits,
+                rate_hz = commits as f64 / elapsed,
+                "mpv layout telemetry"
             );
             player.layout_commits.set(0);
             player.layout_sample_at.set(now);
@@ -126,13 +127,19 @@ pub fn stats(payload: NativeSessionRequest) -> Result<NativePlaybackSnapshot> {
     })
 }
 
-pub fn close(_payload: NativeSessionRequest) -> Result<()> {
-    // A close means the caller is finished with the native player. A key
-    // mismatch would mean the adapter and the engine desynchronized;
-    // leaving the engine running would leak playing audio, so park
-    // regardless of the presented key.
-    park_player()?;
-    Ok(())
+/// Parks the engine when the presented key owns it, or when no session owns
+/// it. Returns whether the engine was released. Late cleanup from an older
+/// controller (a stale key) must not park a newer player's session.
+pub fn close(payload: NativeSessionRequest) -> Result<bool> {
+    let releases = PLAYER.with(|slot| {
+        slot.borrow().as_ref().is_none_or(|player| {
+            crate::desktop::linux::close_releases(&player.session_key, &payload.session_key)
+        })
+    });
+    if releases {
+        park_player()?;
+    }
+    Ok(releases)
 }
 
 pub fn force_close() -> Result<()> {
@@ -204,12 +211,13 @@ pub(super) fn snapshot(player: &mut MpvPlayer) -> Result<NativePlaybackSnapshot>
             rendered.saturating_sub(player.last_presented_frames) as f64 / elapsed;
         player.last_presented_frames = rendered;
         player.last_sample_at = now;
-        if std::env::var_os("TAURI_VIDEO_TELEMETRY").is_some() {
-            eprintln!(
-                "mpv telemetry: presented={rendered} dropped={dropped} fps={:.2} position={position:.2}s",
-                player.measured_fps,
-            );
-        }
+        tracing::trace!(
+            presented = rendered,
+            dropped,
+            fps = player.measured_fps,
+            position_seconds = position,
+            "mpv playback telemetry"
+        );
     }
     let video_width = property::<i64>(&player.mpv, "video-params/w")
         .unwrap_or(0)
@@ -262,15 +270,12 @@ fn refresh_tracks(player: &mut MpvPlayer) {
             "sub" => TrackKind::Subtitle,
             _ => continue,
         };
-        let mpv_id =
-            property::<i64>(&player.mpv, &format!("{prefix}/id")).unwrap_or(source_index);
+        let mpv_id = property::<i64>(&player.mpv, &format!("{prefix}/id")).unwrap_or(source_index);
         let public_index = tracks.len() as i32;
         let language = property::<String>(&player.mpv, &format!("{prefix}/lang"))
             .unwrap_or_else(|| "und".into());
-        let title =
-            property::<String>(&player.mpv, &format!("{prefix}/title")).unwrap_or_default();
-        let codec =
-            property::<String>(&player.mpv, &format!("{prefix}/codec")).unwrap_or_default();
+        let title = property::<String>(&player.mpv, &format!("{prefix}/title")).unwrap_or_default();
+        let codec = property::<String>(&player.mpv, &format!("{prefix}/codec")).unwrap_or_default();
         let selected =
             property::<bool>(&player.mpv, &format!("{prefix}/selected")).unwrap_or(false);
         tracks.push(NativeTrackInfo {
@@ -338,14 +343,13 @@ fn drain_events(player: &mut MpvPlayer) -> Result<()> {
         };
         match event.map_err(|error| {
             let error = mpv_error(error);
-            eprintln!("mpv event error: {error}");
+            tracing::warn!(%error, "mpv event error");
             error
         })? {
             Event::Shutdown => return Err(Error::Pipeline("mpv shut down".into())),
-            Event::StartFile
-            | Event::FileLoaded
-            | Event::VideoReconfig
-            | Event::AudioReconfig => player.tracks_dirty = true,
+            Event::StartFile | Event::FileLoaded | Event::VideoReconfig | Event::AudioReconfig => {
+                player.tracks_dirty = true
+            }
             Event::EndFile(_) => {}
             _ => {}
         }

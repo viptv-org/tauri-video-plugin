@@ -40,6 +40,7 @@ const config: RollupOptions = {
         'guest-js/native-surface-layout.ts',
         'guest-js/native-surface-geometry.ts',
         'guest-js/native-surface-compositor.ts',
+        'guest-js/native-surface-model.ts',
         'guest-js/native-surface-state.ts',
         'guest-js/native-surface-paint.ts',
         'guest-js/native-surface-mutation.ts',

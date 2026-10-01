@@ -13,13 +13,12 @@ import {
   MASK_POSITION_PROPERTY,
   MASK_SIZE_PROPERTY,
   OCCLUDER_ATTRIBUTE,
-  restoreOccluder,
   type BackgroundSnapshot,
   type ClippedOccluder,
   type DrilledAncestor,
   type InlinePropertySnapshot,
   type NativeCssSurfaceState,
-} from './native-surface-state'
+} from './native-surface-model'
 
 const BACKGROUND_PROPERTIES = [
   'background-color', 'background-image', 'background-position', 'background-size',
@@ -239,4 +238,16 @@ export function restoreInlineProperty(
 
 function clipsOverflow(value: string): boolean {
   return value === 'hidden' || value === 'clip' || value === 'scroll' || value === 'auto'
+}
+
+export function restoreOccluder(occluder: ClippedOccluder): void {
+  if (!occluder.active) return
+  if (occluder.element.getAttribute(OCCLUDER_ATTRIBUTE) === occluder.owner) {
+    if (occluder.previousOwner === null) occluder.element.removeAttribute(OCCLUDER_ATTRIBUTE)
+    else occluder.element.setAttribute(OCCLUDER_ATTRIBUTE, occluder.previousOwner)
+  }
+  restoreInlineProperty(occluder.element, MASK_IMAGE_PROPERTY, occluder.previousImage)
+  restoreInlineProperty(occluder.element, MASK_POSITION_PROPERTY, occluder.previousPosition)
+  restoreInlineProperty(occluder.element, MASK_SIZE_PROPERTY, occluder.previousSize)
+  occluder.active = false
 }

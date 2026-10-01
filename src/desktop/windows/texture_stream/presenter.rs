@@ -17,15 +17,15 @@ use windows::{
 
 use crate::{Error, Result};
 
-use super::UiDispatch;
 use super::d3d11::{
-    D3d11MemoryMap, SendGstDevice, gst_d3d11_device_lock, gst_d3d11_device_unlock,
-    gst_d3d11_memory_get_resource_handle, gst_d3d11_memory_get_subresource_index,
-    gst_device_for_adapter, gst_is_d3d11_memory,
+    gst_d3d11_device_lock, gst_d3d11_device_unlock, gst_d3d11_memory_get_resource_handle,
+    gst_d3d11_memory_get_subresource_index, gst_device_for_adapter, gst_is_d3d11_memory,
+    D3d11MemoryMap, SendGstDevice,
 };
-use super::targets::{DrawTarget, draw_target, reclaim_available};
+use super::targets::{draw_target, reclaim_available, DrawTarget};
 use super::texture_error;
 use super::webview2::{ICoreWebView2ExperimentalEnvironment12, SendStream};
+use super::UiDispatch;
 
 const MAX_TEXTURES: u32 = 4;
 
