@@ -16,6 +16,10 @@ pub struct NativePluginDiagnostics {
     /// Playback engines compiled into this build, in the order an 'auto'
     /// client should prefer them.
     pub engines: Vec<String>,
+    /// Whether HLS sources are served through the plugin's loopback
+    /// sanitizing proxy (disguised segments cleaned, headers applied there).
+    #[serde(default)]
+    pub source_proxy: bool,
 }
 
 /// The playback engines compiled into this build, in the order an 'auto'
@@ -41,6 +45,7 @@ impl NativePluginDiagnostics {
             crate_version: env!("CARGO_PKG_VERSION").to_owned(),
             platform: std::env::consts::OS.to_owned(),
             engines: compiled_engines(),
+            source_proxy: cfg!(any(target_os = "linux", windows)),
         }
     }
 }
@@ -72,6 +77,11 @@ pub struct NativeOpenRequest {
     /// the platform's primary native backend; alternatives must be explicit.
     #[serde(default)]
     pub backend: Option<String>,
+    /// Serve this source through the loopback sanitizing proxy. Omitted:
+    /// http(s) HLS (`.m3u8`/`.m3u`) sources are proxied, others open
+    /// directly. `true` forces it for any http(s) source; `false` opts out.
+    #[serde(default)]
+    pub source_proxy: Option<bool>,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
     #[serde(default)]
@@ -296,6 +306,9 @@ pub struct NativePlaybackSnapshot {
     pub backend: String,
     #[serde(default)]
     pub encoded_bytes_buffered: u64,
+    /// Whether this session is served through the loopback sanitizing proxy.
+    #[serde(default)]
+    pub source_proxied: bool,
     #[serde(default)]
     pub average_frame_processing_us: f64,
 }

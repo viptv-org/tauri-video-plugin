@@ -236,6 +236,7 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
         measured_fps: player.measured_fps,
         hardware_backend: "gstreamer-va-gl-gtk".into(),
         backend: "gstreamer".into(),
+        source_proxied: false,
         encoded_bytes_buffered: player.target_buffer_bytes.map_or(0, |target| {
             target.saturating_mul(player.buffering_percent.max(0) as u64) / 100
         }),
