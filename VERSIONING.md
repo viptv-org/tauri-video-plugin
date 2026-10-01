@@ -48,7 +48,7 @@ diagnostics or capability fields do not require a protocol bump. Before 1.0, a
 protocol bump also requires a new compatibility epoch (for example, `0.1.x`
 to `0.2.0`) and a new row in this table.
 
-## Release consistency gate
+## Release checklist
 
 Every release updates all of these together:
 
@@ -64,16 +64,6 @@ Every release updates all of these together:
 - the current compatibility-table row and `TAURI_VIDEO_PROTOCOL_VERSION`;
 - an exact `## X.Y.Z` entry in `CHANGELOG.md`.
 
-Run the same check used by CI before committing:
-
-```sh
-npm run check:release
-```
-
-Stable GitHub Releases use the single tag `vX.Y.Z`; both trusted-publishing
-workflows validate that tag through the consistency gate before uploading.
-Published versions are immutable and must never be reused.
-
-Prereleases use a SemVer identifier such as `0.2.0-next.0`, publish to npm
-under the `next` dist-tag, and must use a dedicated prerelease workflow rather
-than either stable workflow. Prereleases never update `latest`.
+There is no automated consistency gate or registry publication (see the
+delivery policy in `CONTRIBUTING.md`); review these together by hand. Versions
+that consumers have pinned must never be rewritten.

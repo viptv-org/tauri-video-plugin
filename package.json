@@ -1,19 +1,16 @@
 {
   "name": "@viptv/video-tauri",
   "version": "0.4.0",
-  "author": "Air contributors",
-  "description": "Tauri native video engine for VIPTV (Rust crate + the JS protocol fa\u00e7ade that wraps the get-air player library).",
+  "author": "VIPTV contributors",
+  "description": "VIPTV native Tauri video engine: the tauri-plugin-video Rust crate and its JavaScript protocol fa\u00e7ade.",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-air/tauri-video-plugin.git"
+    "url": "git+https://github.com/viptv-org/tauri-video-plugin.git"
   },
-  "homepage": "https://github.com/get-air/tauri-video-plugin#readme",
-  "bugs": "https://github.com/get-air/tauri-video-plugin/issues",
-  "publishConfig": {
-    "access": "public",
-    "provenance": true,
-    "registry": "https://registry.npmjs.org/"
+  "homepage": "https://github.com/viptv-org/tauri-video-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/viptv-org/tauri-video-plugin/issues"
   },
   "sideEffects": false,
   "keywords": [

@@ -5,6 +5,15 @@ Release numbering follows the
 
 ## Unreleased
 
+- `native_diagnostics.engines` lists GStreamer first, matching the default
+  backend for an omitted request; mpv is an explicit Linux alternative.
+- Linux `native_close` ignores late cleanup presented with a stale session
+  key instead of parking the newer session (Windows already did).
+- Engine diagnostics use `tracing` instead of `TAURI_VIDEO_TELEMETRY`-gated
+  `eprintln!`.
+- Rewrite `SPEC.md` from the code; retire the obsolete release-consistency
+  script and publishing skill; point package metadata at `viptv-org`.
+
 - Return the adapter to a WebView-only contract: remove the Blitz/native-only
   entrypoint, canvas/Blits example, and transparent-canvas bypass. Android
   native playback now requires Tauri to initialize the plugin with a WebView.
