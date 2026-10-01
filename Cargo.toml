@@ -56,6 +56,16 @@ tracing = "0.1"
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21.1"
 
+# Loopback HLS sanitizing proxy (src/desktop/source_proxy.rs). These crates
+# are already in a Tauri desktop app's graph (tauri, tauri-plugin-http).
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
+getrandom = "0.3"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+url = "2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = { version = "0.22", optional = true }
 gstreamer = { version = "0.25.3", optional = true }

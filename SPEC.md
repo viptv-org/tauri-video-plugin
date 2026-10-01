@@ -29,7 +29,7 @@ controls, overlays or focus.
 
 | Command | Payload | Result |
 | --- | --- | --- |
-| `native_diagnostics` | none | `{protocolVersion, crateName, crateVersion, platform, engines[]}` |
+| `native_diagnostics` | none | `{protocolVersion, crateName, crateVersion, platform, engines[], sourceProxy}` |
 | `native_prepare_texture_stream` | `sessionKey` | WebView2 stream id (Windows only) |
 | `native_open` | `NativeOpenRequest` | `NativePlaybackSnapshot` |
 | `native_control` | `{sessionKey, action, value, index}` | `NativePlaybackSnapshot` |
@@ -114,10 +114,72 @@ request with `INVALID_REQUEST` ("Invalid source authorization") when:
   the same meaning (`Cookie`, `User-Agent`, `Referer`) carrying a different
   value.
 
-Engines apply the validated values: GStreamer sets `user-agent`, `cookies`,
+Engines apply the validated values for directly opened sources (proxied HLS
+sources carry them in the proxy instead, see below): GStreamer sets `user-agent`, `cookies`,
 `extra-headers` (adding `Referer` when not already a header) and a 60 s
 `timeout` on HTTP sources; mpv sets `http-header-fields` (cookie and referrer
 folded in), `user-agent` (default `tauri-plugin-video`) and `tls-ca-file`.
+
+## HLS sanitizing proxy
+
+IPTV CDNs disguise HLS segments: they are named `.png`, `.jpg`, `.gif`,
+`.css` or have no extension, are served with a lying `Content-Type`, and often
+carry a real image header or stylesheet text before the media. GStreamer's
+hlsdemux2 and mpv typefind those bytes as images and fail; no engine setting
+fixes it. On Linux and Windows the plugin therefore serves HLS through a small
+HTTP proxy it owns (`src/desktop/source_proxy*`).
+
+- **When.** `native_open` proxies an http(s) source whose path ends in
+  `.m3u8`/`.m3u`. `NativeOpenRequest.sourceProxy: true` forces the proxy for
+  any http(s) source (an HLS playlist without that name); `false` opts out.
+  Other sources (MP4, MKV, raw TS) open directly as before. If the proxy
+  cannot start or register the source, it opens directly.
+- **Shape.** The server starts lazily on first use, binds `127.0.0.1` on an
+  ephemeral port and runs on its own two-worker runtime. Each opened source
+  gets a random 128-bit capability token in the path
+  (`/{token}/{kind}/{hex upstream URL}/{name}`); requests without a live
+  token are `404`.
+- **Authorization.** The proxy fetches upstream itself with the validated
+  headers, cookie, referrer, user agent (default `tauri-plugin-video`) and
+  `tlsCaFile` roots. The engine receives only the proxy URL, with no headers,
+  cookies or TLS file.
+- **Playlists** (detected by `#EXTM3U` content, at most 4 MiB) are rewritten:
+  stream variants, `EXT-X-MEDIA`, `EXT-X-I-FRAME-STREAM-INF` and rendition
+  reports as playlists; segments, `EXT-X-MAP`, `EXT-X-PART` and preload hints
+  as segments; `EXT-X-KEY`, `EXT-X-SESSION-KEY` and session data as raw
+  resources. URIs are resolved against the playlist's final URL with query
+  strings kept; anything that is not http(s) (`file:`, `data:`, `skd:`, …)
+  is replaced by a URL that always fails.
+- **Segments** are classified by their first 64 KiB, never by name or header:
+  junk before the first MPEG-TS packet run (sync `0x47` repeating at the
+  188-byte stride, five packets, or three for a complete short segment, so a
+  GIF's leading `G` is not a sync byte), the first fMP4 box chain (`ftyp`,
+  `styp`, `moof`, `moov`, `sidx`, `emsg`, `prft`), or the first ID3 tag/ADTS
+  frame run is dropped, and the response carries `video/mp2t`, `video/mp4` or
+  `audio/aac`. An unrecognised body passes through unchanged, without
+  repeating an image, font, stylesheet or HTML type. The rest of the body is
+  streamed, never buffered.
+- **Ranges.** A segment's prefix length is remembered (up to 1024 per
+  source); later ranges are shifted past it and `Content-Length` and
+  `Content-Range` describe the cleaned resource. A range that starts inside an
+  unseen segment is forwarded unchanged. Keys and raw resources are forwarded
+  byte-for-byte, ranges included.
+- **Bounds.** At most 6 concurrent upstream requests (queued up to 20 s, then
+  `503`) and 32 engine connections; 10 s connect, 30 s read and 30 s playlist
+  timeouts; up to 8 redirects, only to http(s), and a public source may not
+  redirect into loopback, private, link-local or CGNAT address literals or
+  `localhost` (a source that is already local may).
+- **Ownership.** A registration becomes current only when the engine accepts
+  the source; then older routes end. A failed open discards only the new
+  registration. `native_close` releases routes with the engine's late-cleanup
+  rule (owned by the presented key, or unowned). Ending a route aborts its
+  in-flight transfers.
+- **Errors.** Upstream refusals keep their status (`401`, `403`, `404`, …) so
+  engine error mapping is unchanged; transport failures are `502`.
+- **Diagnostics.** `native_diagnostics.sourceProxy` is true on desktop builds;
+  `NativePlaybackSnapshot.sourceProxied` says whether the current session is
+  proxied. Proxy logs carry fixed messages and counts only, never URLs,
+  headers, cookies or paths.
 
 ## Snapshots, tracks and live/DVR
 
@@ -175,6 +237,7 @@ runtime facts of the installed engine and hardware.
   `targetBufferBytes` is clamped to at least 4 MiB on GStreamer and maps to the
   demuxer cache on mpv. Omitted values keep engine defaults.
 - **Diagnostics:** `native_diagnostics` reports protocol, crate name/version,
+  the `sourceProxy` capability,
   OS and compiled engines only. Engine diagnostics go through `tracing`
   (`debug`/`trace` for telemetry, `warn`/`error` for failures) and never
   include source URLs, headers, cookies, licenses or local paths.
@@ -184,6 +247,9 @@ runtime facts of the installed engine and hardware.
 Locally: `npm run check`, `npm run build`, `cargo fmt --all -- --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and
 `cargo test --all-features` / `--no-default-features` (Linux engine tests decode
-a real MP4 over a local HTTP server through open → stats → seek → close).
+a real MP4 over a local HTTP server through open → stats → seek → close, and
+play disguised HLS — PNG/JPEG/GIF/CSS prefixes, renamed segments, lying
+`Content-Type`, a range origin and fMP4 — to the end on GStreamer and mpv
+through the proxy).
 On the target host, verify surface attachment, source replacement, late-cleanup
 safety, tracks, subtitles, live/DVR seeking and error mapping.

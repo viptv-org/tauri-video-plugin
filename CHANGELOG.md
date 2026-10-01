@@ -5,6 +5,16 @@ Release numbering follows the
 
 ## Unreleased
 
+- Serve desktop HLS sources (Linux and Windows, GStreamer and mpv) through a
+  plugin-owned loopback sanitizing proxy. It fetches upstream with the
+  validated source headers, rewrites playlists back through itself, strips
+  image/stylesheet/junk prefixes before the first MPEG-TS packet run, fMP4
+  box or ADTS/ID3 audio, corrects the segment `Content-Type`, and maps byte
+  ranges past the stripped prefix. Disguised segments (`.png`/`.jpg`/`.gif`/
+  `.css`/no extension, lying `Content-Type`, prepended PNG/JPEG/GIF/CSS) now
+  play on both engines. Additive: `native_diagnostics.sourceProxy`,
+  `NativeOpenRequest.sourceProxy` (force/opt out) and
+  `NativePlaybackSnapshot.sourceProxied`; protocol stays 1.
 - `native_diagnostics.engines` lists GStreamer first, matching the default
   backend for an omitted request; mpv is an explicit Linux alternative.
 - Linux `native_close` ignores late cleanup presented with a stale session

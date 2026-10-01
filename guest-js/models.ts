@@ -54,6 +54,8 @@ export interface NativePlaybackSnapshot {
   measuredFps?: number
   hardwareBackend?: string
   encodedBytesBuffered?: number
+  /** True when the desktop session is served through the loopback HLS sanitizing proxy. */
+  sourceProxied?: boolean
   averageFrameProcessingUs?: number
   container?: string
   tracks: Array<{

@@ -49,7 +49,16 @@ use windows as platform;
 impl<R: Runtime> DesktopVideo<R> {
     #[cfg(any(target_os = "linux", windows))]
     pub fn open_native(&self, payload: NativeOpenRequest) -> crate::Result<NativePlaybackSnapshot> {
-        self.run_on_main(move |app| platform::open(app, payload))
+        // HLS sources are served through the loopback sanitizing proxy; the
+        // registration only becomes current once the engine accepts it.
+        let (payload, pending) = source_proxy::route(payload);
+        let proxied = pending.proxied();
+        let result = self.run_on_main(move |app| platform::open(app, payload));
+        source_proxy::settle(pending, result.is_ok());
+        result.map(|mut snapshot| {
+            snapshot.source_proxied = proxied;
+            snapshot
+        })
     }
 
     #[cfg(any(target_os = "linux", windows))]
@@ -57,7 +66,9 @@ impl<R: Runtime> DesktopVideo<R> {
         &self,
         payload: NativeControlRequest,
     ) -> crate::Result<NativePlaybackSnapshot> {
+        let proxied = source_proxy::active(&payload.session_key);
         self.run_on_main(move |_| platform::control(payload))
+            .map(|snapshot| with_proxy_flag(snapshot, proxied))
     }
 
     #[cfg(any(target_os = "linux", windows))]
@@ -73,12 +84,19 @@ impl<R: Runtime> DesktopVideo<R> {
         &self,
         payload: NativeSessionRequest,
     ) -> crate::Result<NativePlaybackSnapshot> {
+        let proxied = source_proxy::active(&payload.session_key);
         self.run_on_main(move |_| platform::stats(payload))
+            .map(|snapshot| with_proxy_flag(snapshot, proxied))
     }
 
     #[cfg(any(target_os = "linux", windows))]
     pub fn close_native(&self, payload: NativeSessionRequest) -> crate::Result<()> {
-        self.run_on_main(move |_| platform::close(payload))
+        let session_key = payload.session_key.clone();
+        self.run_on_main(move |_| platform::close(payload))?;
+        // Same ownership rule as the engine: a late close from an older
+        // controller leaves the newer session's route alone.
+        source_proxy::release(&session_key);
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -162,6 +180,15 @@ impl<R: Runtime> DesktopVideo<R> {
     }
 }
 
+#[cfg(any(target_os = "linux", windows))]
+fn with_proxy_flag(mut snapshot: NativePlaybackSnapshot, proxied: bool) -> NativePlaybackSnapshot {
+    snapshot.source_proxied = proxied;
+    snapshot
+}
+
+#[cfg(any(target_os = "linux", windows))]
+pub(crate) mod source_proxy;
+
 #[cfg(windows)]
 mod windows;
 
@@ -191,6 +218,16 @@ mod linux_mpv;
 ))]
 #[path = "desktop/engine_tests.rs"]
 mod engine_http_tests;
+
+/// Real-engine playback of disguised HLS (renamed segments, lying
+/// Content-Type, image/stylesheet prefixes) through the sanitizing proxy.
+#[cfg(all(
+    test,
+    target_os = "linux",
+    any(feature = "mpv-runtime", feature = "gstreamer-runtime")
+))]
+#[path = "desktop/source_proxy_engine_tests.rs"]
+mod source_proxy_engine_tests;
 
 #[cfg(all(target_os = "linux", not(feature = "mpv-runtime")))]
 use unavailable_linux_backend as linux_mpv;

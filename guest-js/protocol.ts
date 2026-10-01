@@ -20,6 +20,8 @@ export interface NativeVideoPluginDiagnostics {
   readonly protocolVersion: number
   readonly crateName: string
   readonly crateVersion: string
+  /** Desktop builds serve HLS through a loopback sanitizing proxy. */
+  readonly sourceProxy?: boolean
 }
 
 export interface TauriVideoDiagnostics extends NativeVideoPluginDiagnostics {

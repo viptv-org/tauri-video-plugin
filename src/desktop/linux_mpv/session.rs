@@ -246,6 +246,7 @@ pub(super) fn snapshot(player: &mut MpvPlayer) -> Result<NativePlaybackSnapshot>
         measured_fps: player.measured_fps,
         hardware_backend: format!("mpv:{hwdec}:{decoder}:gtk-glarea"),
         backend: "mpv".into(),
+        source_proxied: false,
         encoded_bytes_buffered: property::<i64>(&player.mpv, "cache-used")
             .unwrap_or(0)
             .max(0) as u64
