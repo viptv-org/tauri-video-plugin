@@ -5,6 +5,12 @@ Release numbering follows the
 
 ## Unreleased
 
+- Allocate Linux's native-video overlay and its reparented WebView immediately,
+  preserving the requested video rectangle and full-window UI allocation.
+- Implement GStreamer Crop as aspect-preserving centered presentation inside a
+  clipped viewport, including paused frames, rather than stretching the video.
+
+
 - Serve desktop HLS sources (Linux and Windows, GStreamer and mpv) through a
   plugin-owned loopback sanitizing proxy. It fetches upstream with the
   validated source headers, rewrites playlists back through itself, strips

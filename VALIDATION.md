@@ -1,5 +1,32 @@
 # Validation
 
+## Linux native allocation and picture viewport — 2026-10-02
+
+A fresh generated, header-protected H.264/AAC source was admitted through a real
+account/profile/source-discovery/direct-playback lease against a test-configured
+backend. Its existing test-only loopback source allowance was enabled; production
+transport policy was unchanged. GStreamer decoded and advanced playback. Private
+diagnostics in a muted debug desktop found a 1280x720 GTK window with every newly
+reparented overlay/video/WebView child still allocated at 1x1. After immediate
+allocation and window-allocation propagation, the overlay/WebView were 1280x720
+and the native video widget matched its 1278x677 DOM viewport. Captures and raw
+fixture credentials remained outside Git.
+
+`cargo test --locked --lib --features mpv-runtime` passes 42 tests, including real
+GStreamer/MPV decode/stat/seek and source-header checks; the GTK display test is
+ignored in that ordinary run. Strict library Clippy and formatting pass. The
+explicit GTK display test under Xvfb passes: a 400x300 viewport clips a 534x300
+wide-source surface at a centered horizontal adjustment of 67, clips a tall
+400x600 surface at vertical adjustment 150, then restores Fit without growing the
+viewport. These are actual GTK allocations of an existing static widget, not a
+pixel assertion or physical decoder test. Crop is presentation only, without a
+pipeline format change, decoder seek or new backend lease.
+
+The actual desktop UI must adopt the video picture-mode command and this plugin
+revision together before its toggle is qualified. Final real-display pixel/input
+checks and Windows/macOS/clean-machine qualification remain separate. No production
+data, source, deployment or installer publication was used.
+
 ## Native source headers and safe failures — 2026-09-29
 
 `cargo test --locked --lib --features mpv-runtime` passed 13 tests on Linux,

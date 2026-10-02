@@ -70,7 +70,25 @@ pub fn ensure_host<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         overlay.add_overlay(&fixed);
         overlay.add_overlay(&child);
         gtk_window.add(&overlay);
+        // Tauri keeps a realized WebView. Reparenting it after realization
+        // can leave the new GTK hierarchy at 1x1 until an external resize.
+        // Allocate the new content immediately and follow future allocations.
+        let content = overlay.clone();
+        gtk_window.connect_size_allocate(move |_, allocation| {
+            content.size_allocate(&gtk::Allocation::new(
+                0,
+                0,
+                allocation.width(),
+                allocation.height(),
+            ));
+        });
         gtk_window.show_all();
+        overlay.size_allocate(&gtk::Allocation::new(
+            0,
+            0,
+            gtk_window.allocated_width(),
+            gtk_window.allocated_height(),
+        ));
         *slot.borrow_mut() = Some(SurfaceHost { fixed });
         Ok(())
     })
@@ -102,6 +120,9 @@ pub fn place_widget(widget: &gtk::Widget, x: f64, y: f64, width: f64, height: f6
         if !widget.is_visible() {
             widget.show();
         }
+        // Native surfaces need the same allocation even while their parent
+        // awaits GTK's next layout pass (including a paused GL frame).
+        widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
         Ok(())
     })
 }
