@@ -253,3 +253,18 @@ play disguised HLS — PNG/JPEG/GIF/CSS prefixes, renamed segments, lying
 through the proxy).
 On the target host, verify surface attachment, source replacement, late-cleanup
 safety, tracks, subtitles, live/DVR seeking and error mapping.
+
+## Linux picture presentation
+
+Linux GStreamer keeps Fit at the source's display aspect ratio. Crop (Fill)
+centers an oversized native widget inside a clipped GTK viewport; it changes
+presentation of the existing frame, including while paused. The viewport stays
+at the DOM anchor's rectangle, and resize/source-dimension changes recompute the
+centered crop. Pixel-aspect ratio is included. No seek, pipeline restart or
+backend session replacement is used. MPV retains its existing native panscan
+implementation. Windows Fit/Fill qualification remains separate.
+
+The Linux surface host allocates the reparented GTK content immediately and
+tracks window allocations, rather than retaining a 1x1 wrapper around a
+realized WebView. Native surfaces receive the requested anchor allocation even
+before GTK's next layout pass.

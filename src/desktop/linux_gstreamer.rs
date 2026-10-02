@@ -36,6 +36,7 @@ struct NativePlayer {
     pipeline: gst::Element,
     gtk_sink: gst::Element,
     widget: gtk::Widget,
+    picture: super::linux_picture::PictureViewport,
     source: Arc<RwLock<NativeOpenRequest>>,
     buffering_percent: i32,
     buffer_duration_seconds: Option<f64>,
@@ -170,6 +171,9 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
         unsafe { gtk::glib::translate::from_glib_none(widget_pointer as *mut gtk::ffi::GtkWidget) };
     widget.set_hexpand(false);
     widget.set_vexpand(false);
+    let mut picture = super::linux_picture::PictureViewport::new(widget);
+    let widget = picture.widget.clone();
+    picture.layout(payload.width, payload.height);
     super::linux_surface::place_widget(
         &widget,
         payload.x,
@@ -183,6 +187,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
         pipeline,
         gtk_sink,
         widget,
+        picture,
         source,
         buffering_percent: 0,
         buffer_duration_seconds,
@@ -296,6 +301,8 @@ fn load_source(player: &mut NativePlayer, payload: &NativeOpenRequest) -> Result
         },
     );
     player.gtk_sink.set_property("force-aspect-ratio", true);
+    player.picture.source_size(0.0, 0.0);
+    player.picture.layout(payload.width, payload.height);
     super::linux_surface::place_widget(
         &player.widget,
         payload.x,

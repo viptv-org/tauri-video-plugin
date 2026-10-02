@@ -64,11 +64,14 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
             }
             "fit" => {
                 player.gtk_sink.set_property("force-aspect-ratio", true);
+                player.picture.fill(false);
             }
             "crop" => {
-                player.gtk_sink.set_property("force-aspect-ratio", false);
+                player.gtk_sink.set_property("force-aspect-ratio", true);
+                player.picture.fill(true);
             }
             "stretch" => {
+                player.picture.fill(false);
                 player.gtk_sink.set_property("force-aspect-ratio", false);
             }
             "track" => select_stream(player, payload.index, true)?,
@@ -85,11 +88,12 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
 
 pub fn layout(payload: NativeLayoutRequest) -> Result<()> {
     PLAYER.with(|slot| {
-        let slot = slot.borrow();
+        let mut slot = slot.borrow_mut();
         let player = slot
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| Error::InvalidRequest("native player is not open".into()))?;
         ensure_session(&player.session_key, &payload.session_key)?;
+        player.picture.layout(payload.width, payload.height);
         crate::desktop::linux_surface::place_widget(
             &player.widget,
             payload.x,
@@ -205,19 +209,25 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
             "GStreamer playback telemetry"
         );
     }
-    let (video_width, video_height) = player
+    let (video_width, video_height, display_width) = player
         .gtk_sink
         .static_pad("sink")
         .and_then(|pad| pad.current_caps())
         .and_then(|caps| {
             caps.structure(0).map(|structure| {
-                (
-                    structure.get::<i32>("width").unwrap_or(0).max(0) as u32,
-                    structure.get::<i32>("height").unwrap_or(0).max(0) as u32,
-                )
+                let width = structure.get::<i32>("width").unwrap_or(0).max(0) as u32;
+                let height = structure.get::<i32>("height").unwrap_or(0).max(0) as u32;
+                let pixel_aspect = structure
+                    .get::<gst::Fraction>("pixel-aspect-ratio")
+                    .map(|ratio| f64::from(ratio.numer()) / f64::from(ratio.denom()))
+                    .unwrap_or(1.0);
+                (width, height, f64::from(width) * pixel_aspect)
             })
         })
-        .unwrap_or((0, 0));
+        .unwrap_or((0, 0, 0.0));
+    player
+        .picture
+        .source_size(display_width, f64::from(video_height));
     let playing = player.desired_playing;
     Ok(NativePlaybackSnapshot {
         duration_seconds: duration,

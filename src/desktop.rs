@@ -202,6 +202,9 @@ mod linux_surface;
 #[cfg(all(target_os = "linux", feature = "gstreamer-runtime"))]
 mod linux_gstreamer;
 
+#[cfg(all(target_os = "linux", feature = "gstreamer-runtime"))]
+mod linux_picture;
+
 #[cfg(all(target_os = "linux", feature = "mpv-runtime"))]
 mod linux_mpv;
 
