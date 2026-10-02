@@ -112,11 +112,11 @@ impl<R: Runtime> DesktopVideo<R> {
 
     #[cfg(any(target_os = "linux", windows))]
     pub fn shutdown_native(&self) -> crate::Result<()> {
-        self.run_on_main(move |_| {
-            let result = platform::shutdown();
-            source_proxy::shutdown();
-            result
-        })
+        let result = self.run_on_main(move |_| platform::shutdown());
+        // Route cancellation is thread-safe and must still run when the
+        // native UI dispatcher times out or never executes the operation.
+        source_proxy::shutdown();
+        result
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
