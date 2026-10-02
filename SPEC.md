@@ -119,10 +119,12 @@ sources carry them in the proxy instead, see below): GStreamer sets `user-agent`
 `extra-headers` (adding `Referer` when not already a header) and a 60 s
 `timeout` on HTTP sources; mpv sets `http-header-fields` (cookie and referrer
 folded in), `user-agent` (default `tauri-plugin-video`) and `tls-ca-file`.
-The mpv HTTP header string list escapes commas with a backslash; percent-length
-quoting belongs to mpv suboptions and must not prefix HTTP field names. A real
-libmpv test requires Authorization, Cookie, Referer and User-Agent together,
-including comma and backslash values, through the production network seam.
+The mpv HTTP field list is cleared and populated with literal
+`change-list append` items. This avoids treating commas or trailing backslashes in opaque
+field values as list syntax. Percent-length quoting belongs to mpv suboptions
+and must not prefix HTTP field names. A real libmpv test requires Authorization,
+Cookie, Referer and User-Agent together, including comma and backslash values,
+through the production network seam.
 
 ## HLS sanitizing proxy
 

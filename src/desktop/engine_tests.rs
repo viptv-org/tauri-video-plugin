@@ -168,7 +168,7 @@ fn mpv_engine_preserves_required_authorization_and_escaped_header_values() {
     let port = serve_fixture_with_headers(
         mp4_fixture().clone(),
         &[
-            ("Authorization", "Bearer fixture-only"),
+            ("Authorization", "Bearer fixture-only\\"),
             ("Referer", "https://fixture.invalid/watch"),
             ("User-Agent", "Native Fixture"),
             ("Cookie", "session=fixture-only,second=two"),
@@ -182,7 +182,7 @@ fn mpv_engine_preserves_required_authorization_and_escaped_header_values() {
     mpv.set_property("pause", false).unwrap();
     let payload = serde_json::from_value(serde_json::json!({
         "uri":"http://fixture.invalid/movie", "x":0,"y":0,"width":100,"height":100,
-        "headers":{"Authorization":"Bearer fixture-only","Referer":"https://fixture.invalid/watch","X-Fixture":"one\\two,three"},
+        "headers":{"Authorization":"Bearer fixture-only\\","Referer":"https://fixture.invalid/watch","X-Fixture":"one\\two,three"},
         "cookies":"session=fixture-only,second=two", "userAgent":"Native Fixture"
     })).unwrap();
     super::linux_mpv::configure_network(&mpv, &payload).unwrap();

@@ -371,17 +371,6 @@ pub(super) fn property<T: libmpv2::GetData>(mpv: &Mpv, name: &str) -> Option<T> 
     mpv.get_property(name).ok()
 }
 
-pub(super) fn encode_mpv_list(values: &[String]) -> String {
-    // String-list options use backslash escaping, unlike mpv's filter/EDL
-    // suboption parser. Percent-length quoting here becomes a literal header
-    // name, so the server never receives the required authorization field.
-    values
-        .iter()
-        .map(|value| value.replace(',', "\\,"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 pub(super) fn mpv_error(error: libmpv2::Error) -> Error {
     Error::Pipeline(format!("mpv backend: {error}"))
 }

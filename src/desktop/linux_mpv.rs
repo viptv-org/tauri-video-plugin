@@ -21,9 +21,7 @@ use crate::{
 mod session;
 
 pub use session::{close, control, force_close, layout, stats};
-use session::{
-    encode_mpv_list, mpv_error, open_gl_proc_address, property, schedule_layout_render, snapshot,
-};
+use session::{mpv_error, open_gl_proc_address, property, schedule_layout_render, snapshot};
 
 #[link(name = "GL")]
 unsafe extern "C" {
@@ -367,16 +365,16 @@ pub(super) fn configure_network(mpv: &Mpv, payload: &NativeOpenRequest) -> Resul
     if let Some(value) = payload.referrer.as_ref().filter(|value| !value.is_empty()) {
         headers.insert("Referer".into(), value.clone());
     }
-    if !headers.is_empty() {
-        let values = headers
-            .iter()
-            .map(|(name, value)| format!("{name}: {value}"))
-            .collect::<Vec<_>>();
-        mpv.set_property("http-header-fields", encode_mpv_list(&values))
-            .map_err(mpv_error)?;
-    } else {
-        mpv.set_property("http-header-fields", String::new())
-            .map_err(mpv_error)?;
+    mpv.set_property("http-header-fields", String::new())
+        .map_err(mpv_error)?;
+    // Append accepts one literal list item, avoiding string-list escaping
+    // entirely (including a trailing backslash beside the next separator).
+    for (name, value) in headers {
+        mpv.command(
+            "change-list",
+            &["http-header-fields", "append", &format!("{name}: {value}")],
+        )
+        .map_err(mpv_error)?;
     }
     mpv.set_property(
         "user-agent",
@@ -447,17 +445,4 @@ fn configure_buffer(player: &MpvPlayer, payload: &NativeOpenRequest) -> Result<(
         )
         .map_err(mpv_error)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mpv_list_encoding_preserves_commas_in_headers() {
-        assert_eq!(
-            encode_mpv_list(&["Cookie: a=1,b=2".into()]),
-            "Cookie: a=1\\,b=2"
-        );
-    }
 }
