@@ -268,3 +268,17 @@ The Linux surface host allocates the reparented GTK content immediately and
 tracks window allocations, rather than retaining a 1x1 wrapper around a
 realized WebView. Native surfaces receive the requested anchor allocation even
 before GTK's next layout pass.
+
+## Host shutdown
+
+The Rust `Video.shutdown_native()` API is a host-lifecycle operation, separate
+from a session's ownership-checked `native_close`. Call it from a worker thread;
+the platform dispatcher stops the native engines on the native UI thread before
+returning. Linux GStreamer transitions to NULL and drops its player; MPV stops
+and removes its update/render callbacks through its destructor. All process-owned
+HLS proxy routes are retired even when engine cleanup reports an error. The host
+owns renderer/backend lease cleanup and final process termination.
+
+Debug builds accept `VIPTV_TEST_BLOCK_NATIVE_CLOSE=1` to block the native UI
+close dispatcher for a fault-injection test. Release builds compile out this
+switch. It is not a playback preference or production recovery behavior.

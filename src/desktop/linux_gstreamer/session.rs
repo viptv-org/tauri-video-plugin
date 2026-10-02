@@ -137,6 +137,20 @@ pub fn force_close() -> Result<()> {
     park_player()
 }
 
+pub fn shutdown() -> Result<()> {
+    PLAYER.with(|slot| {
+        let Some(player) = slot.borrow_mut().take() else {
+            return Ok(());
+        };
+        let result = player
+            .pipeline
+            .set_state(gst::State::Null)
+            .map_err(|error| Error::Pipeline(error.to_string()));
+        player.widget.hide();
+        result.map(|_| ())
+    })
+}
+
 fn park_player() -> Result<()> {
     PLAYER.with(|slot| {
         let mut slot = slot.borrow_mut();

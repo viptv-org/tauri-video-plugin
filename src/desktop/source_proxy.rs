@@ -117,6 +117,14 @@ pub(crate) fn release(session_key: &str) {
     }
 }
 
+/// Retires every process-owned route when the host exits. Unlike an ordinary
+/// session close, host shutdown has authority over all of its capabilities.
+pub(crate) fn shutdown() {
+    if let Some(proxy) = PROXY.get().and_then(Option::as_ref) {
+        proxy.shutdown();
+    }
+}
+
 /// Whether the session owning the engine is served through the proxy.
 pub(crate) fn active(session_key: &str) -> bool {
     PROXY
@@ -206,6 +214,12 @@ impl Proxy {
             }
             !released
         });
+    }
+
+    pub(crate) fn shutdown(&self) {
+        for route in self.shared.routes.lock().drain(..) {
+            route.close();
+        }
     }
 
     pub(crate) fn active(&self, session_key: &str) -> bool {
@@ -397,6 +411,25 @@ mod tests {
         ] {
             assert!(!is_private_host(&Url::parse(url).unwrap()), "{url}");
         }
+    }
+
+    #[test]
+    fn host_shutdown_retires_every_current_and_pending_capability() {
+        let proxy = Proxy::start().unwrap();
+        let (first, _first_pending) = proxy.route(request("http://127.0.0.1:9/a.m3u8", None));
+        let mut next = request("http://127.0.0.1:9/b.m3u8", None);
+        next.session_key = "session-b".into();
+        let (second, _second_pending) = proxy.route(next);
+        assert!(proxy.active("session-a") && proxy.active("session-b"));
+        proxy.shutdown();
+        proxy.shutdown();
+        assert!(!proxy.active("session-a") && !proxy.active("session-b"));
+        proxy.runtime.block_on(async {
+            for uri in [first.uri, second.uri] {
+                let response = reqwest::Client::new().get(uri).send().await.unwrap();
+                assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+            }
+        });
     }
 
     #[test]

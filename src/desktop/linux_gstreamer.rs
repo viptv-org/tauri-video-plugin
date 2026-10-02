@@ -23,7 +23,7 @@ use crate::{
 mod session;
 
 use session::snapshot;
-pub use session::{close, control, force_close, layout, stats};
+pub use session::{close, control, force_close, layout, shutdown, stats};
 
 static GST_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 

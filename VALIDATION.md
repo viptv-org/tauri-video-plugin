@@ -1,5 +1,23 @@
 # Validation
 
+## Native host shutdown — 2026-10-02
+
+A real synthetic authenticated direct GStreamer source was opened in the Linux
+desktop. Before the host-lifecycle fix, closing its actual window removed the
+accessibility window but left its process and audio stream alive for over four
+minutes. With the renderer handshake and this Rust cleanup API, normal Close
+stopped the player, sent a real backend lease DELETE returning 200, exited the
+native process and removed its audio stream.
+
+`cargo test --locked --lib --features mpv-runtime` passes 43 tests, including the
+new host-shutdown check that retires current and pending proxy capabilities;
+strict library Clippy and formatting pass. Existing real GStreamer/MPV
+source-header/decode/stat/seek tests remain green. A debug-only stalled close
+allowed the desktop's independent watchdog to be qualified; that process-exit
+policy lives in the desktop repository. Windows shutdown code was inspected but
+not built or executed on Windows. No installer, production source, production
+data or deployment was involved.
+
 ## Linux native allocation and picture viewport — 2026-10-02
 
 A fresh generated, header-protected H.264/AAC source was admitted through a real

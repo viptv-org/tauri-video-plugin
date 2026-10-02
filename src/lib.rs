@@ -44,6 +44,14 @@ impl<R: Runtime> Video<R> {
         &self.desktop
     }
 
+    /// Stops process-owned native playback before a desktop host exits.
+    /// Call from a worker thread: the platform dispatcher performs cleanup
+    /// on the native UI thread before returning.
+    #[cfg(desktop)]
+    pub fn shutdown_native(&self) -> Result<()> {
+        self.desktop.shutdown_native()
+    }
+
     #[cfg(mobile)]
     pub(crate) fn mobile(&self) -> &mobile::MobileVideo<R> {
         &self.mobile
