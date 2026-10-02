@@ -119,6 +119,13 @@ sources carry them in the proxy instead, see below): GStreamer sets `user-agent`
 `extra-headers` (adding `Referer` when not already a header) and a 60 s
 `timeout` on HTTP sources; mpv sets `http-header-fields` (cookie and referrer
 folded in), `user-agent` (default `tauri-plugin-video`) and `tls-ca-file`.
+The mpv HTTP field list is replaced as a native node array, preserving opaque
+commas and backslashes without list parsing or file-local command resets.
+Percent-length quoting belongs to mpv suboptions and must not prefix HTTP field
+names. A real libmpv test uses the complete production open/replace sequence:
+Authorization, Cookie, Referer and User-Agent must arrive together, including
+comma and trailing-backslash values. Replacement also removes the prior
+source's fields before decoding the new source at its requested position.
 
 ## HLS sanitizing proxy
 

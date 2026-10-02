@@ -1,6 +1,5 @@
 use std::{
     ffi::{c_void, CString},
-    fmt::Write as _,
     rc::Rc,
     time::Instant,
 };
@@ -370,14 +369,6 @@ fn ensure_session(active: &str, requested: &str) -> Result<()> {
 
 pub(super) fn property<T: libmpv2::GetData>(mpv: &Mpv, name: &str) -> Option<T> {
     mpv.get_property(name).ok()
-}
-
-pub(super) fn encode_mpv_list(values: &[String]) -> String {
-    values.iter().fold(String::new(), |mut encoded, value| {
-        let separator = if encoded.is_empty() { "" } else { "," };
-        let _ = write!(encoded, "{separator}%{}%{value}", value.len());
-        encoded
-    })
 }
 
 pub(super) fn mpv_error(error: libmpv2::Error) -> Error {

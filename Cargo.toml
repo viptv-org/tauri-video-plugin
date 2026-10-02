@@ -44,7 +44,7 @@ gstreamer-runtime = [
   "dep:gstreamer-app",
   "dep:gstreamer-video",
 ]
-mpv-runtime = ["dep:libc", "dep:libmpv2"]
+mpv-runtime = ["dep:libc", "dep:libmpv2", "dep:libmpv2-sys"]
 
 [dependencies]
 parking_lot = "0.12"
@@ -73,6 +73,7 @@ gstreamer-video = { version = "0.25.3", optional = true }
 gtk = "0.18.2"
 libc = { version = "0.2", optional = true }
 libmpv2 = { version = "5.0.3", default-features = true, optional = true }
+libmpv2-sys = { version = "4.0.1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 tauri = { version = "2.11.5", default-features = false, features = ["wry"] }
