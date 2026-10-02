@@ -1,6 +1,5 @@
 use std::{
     ffi::{c_void, CString},
-    fmt::Write as _,
     rc::Rc,
     time::Instant,
 };
@@ -373,11 +372,14 @@ pub(super) fn property<T: libmpv2::GetData>(mpv: &Mpv, name: &str) -> Option<T> 
 }
 
 pub(super) fn encode_mpv_list(values: &[String]) -> String {
-    values.iter().fold(String::new(), |mut encoded, value| {
-        let separator = if encoded.is_empty() { "" } else { "," };
-        let _ = write!(encoded, "{separator}%{}%{value}", value.len());
-        encoded
-    })
+    // String-list options use backslash escaping, unlike mpv's filter/EDL
+    // suboption parser. Percent-length quoting here becomes a literal header
+    // name, so the server never receives the required authorization field.
+    values
+        .iter()
+        .map(|value| value.replace(',', "\\,"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 pub(super) fn mpv_error(error: libmpv2::Error) -> Error {

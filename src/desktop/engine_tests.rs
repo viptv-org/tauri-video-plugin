@@ -164,6 +164,46 @@ fn mpv_engine_opens_stats_and_seeks_an_http_mp4() {
 
 #[cfg(feature = "mpv-runtime")]
 #[test]
+fn mpv_engine_preserves_required_authorization_and_escaped_header_values() {
+    let port = serve_fixture_with_headers(
+        mp4_fixture().clone(),
+        &[
+            ("Authorization", "Bearer fixture-only"),
+            ("Referer", "https://fixture.invalid/watch"),
+            ("User-Agent", "Native Fixture"),
+            ("Cookie", "session=fixture-only,second=two"),
+            ("X-Fixture", "one\\two,three"),
+        ],
+    )
+    .unwrap();
+    let mpv = super::linux_mpv::create_engine().unwrap();
+    mpv.set_property("vo", "null").unwrap();
+    mpv.set_property("ao", "null").unwrap();
+    mpv.set_property("pause", false).unwrap();
+    let payload = serde_json::from_value(serde_json::json!({
+        "uri":"http://fixture.invalid/movie", "x":0,"y":0,"width":100,"height":100,
+        "headers":{"Authorization":"Bearer fixture-only","Referer":"https://fixture.invalid/watch","X-Fixture":"one\\two,three"},
+        "cookies":"session=fixture-only,second=two", "userAgent":"Native Fixture"
+    })).unwrap();
+    super::linux_mpv::configure_network(&mpv, &payload).unwrap();
+    mpv.command(
+        "loadfile",
+        &[&format!("http://127.0.0.1:{port}/fixture.mp4"), "replace"],
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while mpv.get_property::<f64>("time-pos").unwrap_or(0.0) < 0.25 {
+        assert!(
+            Instant::now() < deadline,
+            "authorized MPV media never decoded"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    mpv.command("stop", &[]).unwrap();
+}
+
+#[cfg(feature = "mpv-runtime")]
+#[test]
 fn mpv_engine_opens_at_the_requested_start_position() {
     let port = serve_fixture(mp4_fixture().clone()).expect("local HTTP fixture starts");
     let uri = format!("http://127.0.0.1:{port}/fixture.mp4");

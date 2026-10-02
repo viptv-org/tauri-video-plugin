@@ -306,7 +306,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
 
 fn load_source(player: &mut MpvPlayer, payload: &NativeOpenRequest) -> Result<()> {
     player.mpv.command("stop", &[]).map_err(mpv_error)?;
-    configure_network(player, payload)?;
+    configure_network(&player.mpv, payload)?;
     configure_buffer(player, payload)?;
     player
         .mpv
@@ -359,7 +359,7 @@ fn load_source(player: &mut MpvPlayer, payload: &NativeOpenRequest) -> Result<()
     Ok(())
 }
 
-fn configure_network(player: &MpvPlayer, payload: &NativeOpenRequest) -> Result<()> {
+pub(super) fn configure_network(mpv: &Mpv, payload: &NativeOpenRequest) -> Result<()> {
     let mut headers = payload.headers.clone();
     if let Some(value) = payload.cookies.as_ref().filter(|value| !value.is_empty()) {
         headers.insert("Cookie".into(), value.clone());
@@ -372,33 +372,25 @@ fn configure_network(player: &MpvPlayer, payload: &NativeOpenRequest) -> Result<
             .iter()
             .map(|(name, value)| format!("{name}: {value}"))
             .collect::<Vec<_>>();
-        player
-            .mpv
-            .set_property("http-header-fields", encode_mpv_list(&values))
+        mpv.set_property("http-header-fields", encode_mpv_list(&values))
             .map_err(mpv_error)?;
     } else {
-        player
-            .mpv
-            .set_property("http-header-fields", String::new())
+        mpv.set_property("http-header-fields", String::new())
             .map_err(mpv_error)?;
     }
-    player
-        .mpv
-        .set_property(
-            "user-agent",
-            payload
-                .user_agent
-                .clone()
-                .unwrap_or_else(|| "tauri-plugin-video".into()),
-        )
-        .map_err(mpv_error)?;
-    player
-        .mpv
-        .set_property(
-            "tls-ca-file",
-            payload.tls_ca_file.clone().unwrap_or_default(),
-        )
-        .map_err(mpv_error)?;
+    mpv.set_property(
+        "user-agent",
+        payload
+            .user_agent
+            .clone()
+            .unwrap_or_else(|| "tauri-plugin-video".into()),
+    )
+    .map_err(mpv_error)?;
+    mpv.set_property(
+        "tls-ca-file",
+        payload.tls_ca_file.clone().unwrap_or_default(),
+    )
+    .map_err(mpv_error)?;
     Ok(())
 }
 
@@ -465,7 +457,7 @@ mod tests {
     fn mpv_list_encoding_preserves_commas_in_headers() {
         assert_eq!(
             encode_mpv_list(&["Cookie: a=1,b=2".into()]),
-            "%15%Cookie: a=1,b=2"
+            "Cookie: a=1\\,b=2"
         );
     }
 }
