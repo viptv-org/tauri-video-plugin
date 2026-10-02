@@ -42,6 +42,10 @@ pub fn stats(payload: NativeSessionRequest) -> Result<NativePlaybackSnapshot> {
     gstreamer::stats(payload)
 }
 
+pub fn shutdown() -> Result<()> {
+    gstreamer::shutdown()
+}
+
 pub fn close(payload: NativeSessionRequest) -> Result<()> {
     gstreamer::close(payload)
 }
@@ -88,6 +92,10 @@ mod gstreamer {
 
     pub fn stats(_: NativeSessionRequest) -> Result<NativePlaybackSnapshot> {
         unavailable()
+    }
+
+    pub fn shutdown() -> Result<()> {
+        Ok(())
     }
 
     pub fn close(_: NativeSessionRequest) -> Result<()> {

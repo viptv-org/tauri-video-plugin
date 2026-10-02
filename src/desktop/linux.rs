@@ -46,6 +46,18 @@ pub fn open<R: Runtime>(
     result
 }
 
+pub fn shutdown() -> Result<()> {
+    #[cfg(feature = "gstreamer-runtime")]
+    let gstreamer = super::linux_gstreamer::shutdown();
+    #[cfg(not(feature = "gstreamer-runtime"))]
+    let gstreamer = Ok(());
+    // MPV's destructor stops playback, removes its update/render callbacks,
+    // then destroys the render context before its owning libmpv handle.
+    let mpv = super::linux_mpv::force_close();
+    ACTIVE_BACKEND.with(|active| *active.borrow_mut() = None);
+    gstreamer.and(mpv)
+}
+
 pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> {
     match active_backend()? {
         Backend::Gstreamer => super::linux_gstreamer::control(payload),

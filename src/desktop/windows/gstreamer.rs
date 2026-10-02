@@ -23,7 +23,7 @@ use crate::{
 mod session;
 
 use session::snapshot;
-pub use session::{close, control, layout, stats};
+pub use session::{close, control, layout, shutdown, stats};
 
 static GST_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 static PRESENTER: LazyLock<RwLock<Option<Arc<Mutex<texture_stream::TextureStreamPresenter>>>>> =

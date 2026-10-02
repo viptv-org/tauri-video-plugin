@@ -5,6 +5,10 @@ Release numbering follows the
 
 ## Unreleased
 
+- Add Rust `Video.shutdown_native()` for host exit: stop and release the native
+  engines on their UI thread, then retire every process-owned HLS proxy route.
+
+
 - Allocate Linux's native-video overlay and its reparented WebView immediately,
   preserving the requested video rectangle and full-window UI allocation.
 - Implement GStreamer Crop as aspect-preserving centered presentation inside a

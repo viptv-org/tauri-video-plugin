@@ -98,6 +98,18 @@ pub fn stats(payload: NativeSessionRequest) -> Result<NativePlaybackSnapshot> {
     })
 }
 
+pub fn shutdown() -> Result<()> {
+    PLAYER.with(|slot| {
+        if let Some(player) = slot.borrow_mut().take() {
+            player
+                .pipeline
+                .set_state(gst::State::Null)
+                .map_err(|error| Error::Pipeline(error.to_string()))?;
+        }
+        Ok(())
+    })
+}
+
 pub fn close(payload: NativeSessionRequest) -> Result<()> {
     let owns_player = PLAYER.with(|slot| {
         slot.borrow()

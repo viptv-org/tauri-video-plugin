@@ -92,10 +92,35 @@ impl<R: Runtime> DesktopVideo<R> {
     #[cfg(any(target_os = "linux", windows))]
     pub fn close_native(&self, payload: NativeSessionRequest) -> crate::Result<()> {
         let session_key = payload.session_key.clone();
-        self.run_on_main(move |_| platform::close(payload))?;
+        self.run_on_main(move |_| {
+            // Explicit debug-only fault injection for the host's watchdog test.
+            #[cfg(debug_assertions)]
+            if std::env::var("VIPTV_TEST_BLOCK_NATIVE_CLOSE")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                std::thread::sleep(Duration::from_secs(60));
+            }
+            platform::close(payload)
+        })?;
         // Same ownership rule as the engine: a late close from an older
         // controller leaves the newer session's route alone.
         source_proxy::release(&session_key);
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    pub fn shutdown_native(&self) -> crate::Result<()> {
+        let result = self.run_on_main(move |_| platform::shutdown());
+        // Route cancellation is thread-safe and must still run when the
+        // native UI dispatcher times out or never executes the operation.
+        source_proxy::shutdown();
+        result
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
+    pub fn shutdown_native(&self) -> crate::Result<()> {
         Ok(())
     }
 
