@@ -18,6 +18,7 @@ use crate::{
     Error, Result,
 };
 
+mod headers;
 mod session;
 
 pub use session::{close, control, force_close, layout, stats};
@@ -41,7 +42,7 @@ struct TrackTarget {
 }
 
 #[derive(Clone, Copy)]
-struct MpvBufferDefaults {
+pub(super) struct MpvBufferDefaults {
     cache_seconds: f64,
     readahead_seconds: f64,
     forward_bytes: i64,
@@ -51,7 +52,7 @@ struct MpvBufferDefaults {
 }
 
 impl MpvBufferDefaults {
-    fn read(mpv: &Mpv) -> Self {
+    pub(super) fn read(mpv: &Mpv) -> Self {
         Self {
             cache_seconds: property(mpv, "cache-secs").unwrap_or(3_600_000.0),
             readahead_seconds: property(mpv, "demuxer-readahead-secs").unwrap_or(1.0),
@@ -303,39 +304,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
 }
 
 fn load_source(player: &mut MpvPlayer, payload: &NativeOpenRequest) -> Result<()> {
-    player.mpv.command("stop", &[]).map_err(mpv_error)?;
-    configure_network(&player.mpv, payload)?;
-    configure_buffer(player, payload)?;
-    player
-        .mpv
-        .set_property(
-            "volume",
-            if payload.muted {
-                0.0
-            } else {
-                payload.volume.clamp(0.0, 1.0) * 100.0
-            },
-        )
-        .map_err(mpv_error)?;
-    // Open at the requested title position instead of starting at zero
-    // and seeking after opening: the opening seconds of the wrong
-    // position were visible and audible before the post-open seek
-    // landed, which read as "the first seek restarts at the beginning".
-    player
-        .mpv
-        .set_property(
-            "start",
-            format!("+{:.3}", payload.start_at_seconds.max(0.0)),
-        )
-        .map_err(mpv_error)?;
-    player
-        .mpv
-        .set_property("pause", !payload.autoplay)
-        .map_err(mpv_error)?;
-    player
-        .mpv
-        .command("loadfile", &[&payload.uri, "replace"])
-        .map_err(mpv_error)?;
+    open_engine_source(&player.mpv, payload, player.default_buffer)?;
     super::linux_surface::place_widget(
         &player.widget,
         payload.x,
@@ -357,7 +326,41 @@ fn load_source(player: &mut MpvPlayer, payload: &NativeOpenRequest) -> Result<()
     Ok(())
 }
 
-pub(super) fn configure_network(mpv: &Mpv, payload: &NativeOpenRequest) -> Result<()> {
+/// The complete engine open/replace sequence, shared with real HTTP tests.
+pub(super) fn open_engine_source(
+    mpv: &Mpv,
+    payload: &NativeOpenRequest,
+    defaults: MpvBufferDefaults,
+) -> Result<()> {
+    mpv.command("stop", &[]).map_err(mpv_error)?;
+    configure_network(mpv, payload)?;
+    configure_buffer(mpv, defaults, payload)?;
+    mpv.set_property(
+        "volume",
+        if payload.muted {
+            0.0
+        } else {
+            payload.volume.clamp(0.0, 1.0) * 100.0
+        },
+    )
+    .map_err(mpv_error)?;
+    // Open at the requested title position instead of starting at zero
+    // and seeking after opening: the opening seconds of the wrong
+    // position were visible and audible before the post-open seek
+    // landed, which read as "the first seek restarts at the beginning".
+    mpv.set_property(
+        "start",
+        format!("+{:.3}", payload.start_at_seconds.max(0.0)),
+    )
+    .map_err(mpv_error)?;
+    mpv.set_property("pause", !payload.autoplay)
+        .map_err(mpv_error)?;
+    mpv.command("loadfile", &[&payload.uri, "replace"])
+        .map_err(mpv_error)?;
+    Ok(())
+}
+
+fn configure_network(mpv: &Mpv, payload: &NativeOpenRequest) -> Result<()> {
     let mut headers = payload.headers.clone();
     if let Some(value) = payload.cookies.as_ref().filter(|value| !value.is_empty()) {
         headers.insert("Cookie".into(), value.clone());
@@ -365,17 +368,12 @@ pub(super) fn configure_network(mpv: &Mpv, payload: &NativeOpenRequest) -> Resul
     if let Some(value) = payload.referrer.as_ref().filter(|value| !value.is_empty()) {
         headers.insert("Referer".into(), value.clone());
     }
-    mpv.set_property("http-header-fields", String::new())
+    let fields = headers
+        .into_iter()
+        .map(|(name, value)| format!("{name}: {value}"))
+        .collect();
+    mpv.set_property("http-header-fields", headers::HeaderList::new(fields)?)
         .map_err(mpv_error)?;
-    // Append accepts one literal list item, avoiding string-list escaping
-    // entirely (including a trailing backslash beside the next separator).
-    for (name, value) in headers {
-        mpv.command(
-            "change-list",
-            &["http-header-fields", "append", &format!("{name}: {value}")],
-        )
-        .map_err(mpv_error)?;
-    }
     mpv.set_property(
         "user-agent",
         payload
@@ -392,12 +390,13 @@ pub(super) fn configure_network(mpv: &Mpv, payload: &NativeOpenRequest) -> Resul
     Ok(())
 }
 
-fn configure_buffer(player: &MpvPlayer, payload: &NativeOpenRequest) -> Result<()> {
+fn configure_buffer(
+    mpv: &Mpv,
+    defaults: MpvBufferDefaults,
+    payload: &NativeOpenRequest,
+) -> Result<()> {
     let (cache_seconds, readahead_seconds) = payload.max_buffer_ms.map_or(
-        (
-            player.default_buffer.cache_seconds,
-            player.default_buffer.readahead_seconds,
-        ),
+        (defaults.cache_seconds, defaults.readahead_seconds),
         |milliseconds| {
             let seconds = (f64::from(milliseconds) / 1_000.0).clamp(3.0, 120.0);
             (seconds, seconds)
@@ -405,9 +404,9 @@ fn configure_buffer(player: &MpvPlayer, payload: &NativeOpenRequest) -> Result<(
     );
     let (forward_bytes, backward_bytes, donate_buffer) = payload.target_buffer_bytes.map_or(
         (
-            player.default_buffer.forward_bytes,
-            player.default_buffer.backward_bytes,
-            player.default_buffer.donate_buffer,
+            defaults.forward_bytes,
+            defaults.backward_bytes,
+            defaults.donate_buffer,
         ),
         |requested| {
             let total = requested.clamp(8 * 1024 * 1024, i64::MAX as u64);
@@ -417,32 +416,17 @@ fn configure_buffer(player: &MpvPlayer, payload: &NativeOpenRequest) -> Result<(
             ((total - backward) as i64, backward as i64, false)
         },
     );
-    player
-        .mpv
-        .set_property("cache-secs", cache_seconds)
+    mpv.set_property("cache-secs", cache_seconds)
         .map_err(mpv_error)?;
-    player
-        .mpv
-        .set_property("demuxer-readahead-secs", readahead_seconds)
+    mpv.set_property("demuxer-readahead-secs", readahead_seconds)
         .map_err(mpv_error)?;
-    player
-        .mpv
-        .set_property("demuxer-max-bytes", forward_bytes)
+    mpv.set_property("demuxer-max-bytes", forward_bytes)
         .map_err(mpv_error)?;
-    player
-        .mpv
-        .set_property("demuxer-max-back-bytes", backward_bytes)
+    mpv.set_property("demuxer-max-back-bytes", backward_bytes)
         .map_err(mpv_error)?;
-    player
-        .mpv
-        .set_property("demuxer-donate-buffer", donate_buffer)
+    mpv.set_property("demuxer-donate-buffer", donate_buffer)
         .map_err(mpv_error)?;
-    player
-        .mpv
-        .set_property(
-            "demuxer-hysteresis-secs",
-            player.default_buffer.hysteresis_seconds,
-        )
+    mpv.set_property("demuxer-hysteresis-secs", defaults.hysteresis_seconds)
         .map_err(mpv_error)?;
     Ok(())
 }

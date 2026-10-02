@@ -3580,6 +3580,7 @@ dependencies = [
  "jni",
  "libc",
  "libmpv2",
+ "libmpv2-sys",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",
