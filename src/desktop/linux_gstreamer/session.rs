@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use gst::prelude::ObjectExt as GstObjectExt;
 use gst::prelude::*;
@@ -38,24 +38,28 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
                     .map_err(|error| Error::Pipeline(error.to_string()))?;
             }
             "seek" => {
-                // A resume seek can arrive immediately after open, while
-                // playbin3 is still mid-async-transition (not prerolled);
-                // seeking a transitioning pipeline stalls it. Wait bounded
-                // for the pending state change to settle before flushing.
-                let (transition, _current, _pending) =
-                    player.pipeline.state(Some(gst::ClockTime::from_seconds(3)));
-                transition.map_err(|error| {
-                    Error::Pipeline(format!(
-                        "native pipeline state did not settle before seek: {error}"
-                    ))
-                })?;
-                player
-                    .pipeline
-                    .seek_simple(
-                        gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                        gst::ClockTime::from_nseconds((payload.value.max(0.0) * 1e9) as u64),
-                    )
-                    .map_err(|error| Error::Pipeline(error.to_string()))?;
+                // GTK sinks dispatch work back to the UI thread during a
+                // flushing seek. Waiting here deadlocks the UI against the sink.
+                let position = gst::ClockTime::from_nseconds((payload.value.max(0.0) * 1e9) as u64);
+                let source = Arc::clone(&player.source);
+                let session_key = payload.session_key.clone();
+                player.pipeline.call_async(move |pipeline| {
+                    let (transition, _, _) = pipeline.state(Some(gst::ClockTime::from_seconds(3)));
+                    if source.read().session_key != session_key {
+                        return;
+                    }
+                    if transition.is_err()
+                        || pipeline
+                            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, position)
+                            .is_err()
+                    {
+                        gst::element_error!(
+                            pipeline,
+                            gst::CoreError::Failed,
+                            ("Native seek failed")
+                        );
+                    }
+                });
             }
             "volume" => {
                 player
@@ -142,6 +146,7 @@ pub fn shutdown() -> Result<()> {
         let Some(player) = slot.borrow_mut().take() else {
             return Ok(());
         };
+        player.source.write().session_key.clear();
         let result = player
             .pipeline
             .set_state(gst::State::Null)
@@ -157,6 +162,7 @@ fn park_player() -> Result<()> {
         let Some(player) = slot.as_mut() else {
             return Ok(());
         };
+        player.source.write().session_key.clear();
         player
             .pipeline
             .set_state(gst::State::Ready)
