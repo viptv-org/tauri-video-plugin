@@ -18,6 +18,11 @@ pub(super) struct PictureViewport {
 }
 
 impl PictureViewport {
+    #[cfg(test)]
+    pub(super) fn qualification_dimensions(&self) -> (i32, i32) {
+        (self.video.allocated_width(), self.video.allocated_height())
+    }
+
     pub fn new(video: gtk::Widget) -> Self {
         let horizontal = gtk::Adjustment::new(0.0, 0.0, 1.0, 1.0, 1.0, 1.0);
         let vertical = gtk::Adjustment::new(0.0, 0.0, 1.0, 1.0, 1.0, 1.0);

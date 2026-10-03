@@ -2,7 +2,8 @@ use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
     rc::Rc,
-    time::Instant,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 use gtk::prelude::*;
@@ -64,6 +65,8 @@ impl MpvBufferDefaults {
     }
 }
 
+static REDRAW_PENDING: AtomicBool = AtomicBool::new(false);
+
 struct MpvPlayer {
     session_key: String,
     mpv: Mpv,
@@ -97,6 +100,7 @@ impl Drop for MpvPlayer {
         }
         // libmpv requires its render context to be destroyed before the
         // owning mpv handle.
+        self.gl_area.make_current();
         *self.render_context.borrow_mut() = None;
         self.widget.hide();
     }
@@ -107,6 +111,10 @@ pub fn open<R: Runtime>(
     payload: NativeOpenRequest,
 ) -> Result<NativePlaybackSnapshot> {
     super::linux_surface::ensure_host(app)?;
+    open_player(payload)
+}
+
+pub(super) fn open_player(payload: NativeOpenRequest) -> Result<NativePlaybackSnapshot> {
     PLAYER.with(|slot| {
         let mut slot = slot.borrow_mut();
         if let Some(player) = slot.as_mut() {
@@ -208,19 +216,22 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
     .map_err(mpv_error)?;
     tracing::debug!("mpv init: render context ready");
 
-    #[allow(deprecated)]
-    let (redraw_sender, redraw_receiver) =
-        gtk::glib::MainContext::sync_channel::<()>(gtk::glib::Priority::HIGH_IDLE, 1);
-    context.set_update_callback(move || {
-        // A one-item channel coalesces bursts without blocking libmpv or
-        // building a main-loop backlog. HIGH_IDLE runs after normal event
-        // and Tauri command dispatch but just before GTK's redraw phase.
-        let _ = redraw_sender.try_send(());
-    });
+    // This callback runs on libmpv's render thread. A channel lock here can
+    // deadlock render-context destruction on GTK. The callback must stay
+    // allocation-free and lock-free, including while its owner is closing.
+    REDRAW_PENDING.store(false, Ordering::Release);
+    context.set_update_callback(|| REDRAW_PENDING.store(true, Ordering::Release));
     let render_context = Rc::new(RefCell::new(Some(context)));
     let update_area = gl_area.clone();
     let context_for_update = Rc::clone(&render_context);
-    let update_source = redraw_receiver.attach(None, move |_| {
+    let update_source = gtk::glib::timeout_add_local(Duration::from_millis(16), move || {
+        if !REDRAW_PENDING.swap(false, Ordering::AcqRel) {
+            return gtk::glib::ControlFlow::Continue;
+        }
+        update_area.make_current();
+        if update_area.error().is_some() {
+            return gtk::glib::ControlFlow::Continue;
+        }
         let update = context_for_update
             .borrow()
             .as_ref()
@@ -228,6 +239,9 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
             .and_then(|context| context.update().map_err(|error| error.to_string()));
         match update {
             Ok(flags) if flags & mpv_render_update::Frame != 0 => {
+                if let Some(parent) = update_area.parent() {
+                    parent.queue_draw();
+                }
                 update_area.queue_render();
             }
             Ok(_) => {}
@@ -429,4 +443,31 @@ fn configure_buffer(
     mpv.set_property("demuxer-hysteresis-secs", defaults.hysteresis_seconds)
         .map_err(mpv_error)?;
     Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn qualification_volume() -> f64 {
+    PLAYER.with(|slot| {
+        property::<f64>(&slot.borrow().as_ref().unwrap().mpv, "volume").unwrap() / 100.0
+    })
+}
+#[cfg(test)]
+pub(super) fn qualification_panscan() -> f64 {
+    PLAYER.with(|slot| property::<f64>(&slot.borrow().as_ref().unwrap().mpv, "panscan").unwrap())
+}
+
+#[cfg(test)]
+pub(super) fn qualification_surface() -> (bool, bool, bool, i32, i32, String) {
+    PLAYER.with(|slot| {
+        let p = slot.borrow();
+        let p = p.as_ref().unwrap();
+        (
+            p.gl_area.is_visible(),
+            p.gl_area.is_mapped(),
+            p.gl_area.is_realized(),
+            p.gl_area.allocated_width(),
+            p.gl_area.allocated_height(),
+            p.gl_area.error().map(|e| e.to_string()).unwrap_or_default(),
+        )
+    })
 }

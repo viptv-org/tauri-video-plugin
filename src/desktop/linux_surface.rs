@@ -126,3 +126,8 @@ pub fn place_widget(widget: &gtk::Widget, x: f64, y: f64, width: f64, height: f6
         Ok(())
     })
 }
+
+#[cfg(test)]
+pub(super) fn install_qualification_host(fixed: gtk::Fixed) {
+    HOST.with(|slot| *slot.borrow_mut() = Some(SurfaceHost { fixed }));
+}

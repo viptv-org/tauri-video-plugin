@@ -18,3 +18,42 @@ This repository is VIPTV's native Tauri video engine. The Rust crate
 package surface (`@viptv/video-tauri`) is the JavaScript protocol façade; it
 wraps the upstream get-air player library (`@get-air/video`) as a peer
 dependency, which is why that dependency remains.
+
+## Linux playback control checks
+
+GTK owns widget allocation and presentation. GStreamer transitions, seeks,
+stream selection, and timing queries run in a FIFO worker; snapshots read only
+completed telemetry. A dedicated audio filter keeps volume changes outside
+playbin's topology lock. MPV redraw callbacks publish an atomic flag, with the
+owning GL context made current before render updates and destruction.
+
+Run the ordinary native checks with both engines enabled:
+
+```sh
+cargo test --features 'gstreamer-runtime mpv-runtime' --lib -- --test-threads=1
+```
+
+For native GTK controls and rendered caption checks, generate silent media and
+use an isolated display so occlusion cannot suppress frame presentation:
+
+```sh
+python3 qualification/generate-controls-fixture.py /tmp/viptv-native-controls
+GDK_BACKEND=x11 VIPTV_NATIVE_PROVIDER_CASES=/tmp/viptv-native-controls/cases.json \
+  xvfb-run -a cargo test --features 'gstreamer-runtime mpv-runtime' \
+  real_provider_native_surface_controls -- --ignored --nocapture --test-threads=1
+```
+
+The same opt-in test accepts private, authorized real-provider cases. Each entry
+has an anonymous `alias` and a `NativeOpenRequest` in `payload`; a `vod` alias
+also checks a seek to 30 seconds. Keep input files and credentials outside Git.
+The check verifies decoded frames, timing, pause/resume, available alternate
+tracks, subtitles off, paused picture modes, volume, and continued progress.
+Caption pixel comparisons require the generated solid-color fixture and its
+`caption-pixels` alias. After track-selection confirmation, seekable GStreamer deliveries reset their
+timeline at the current position so new subtitle branches share the video
+clock. GStreamer may still lose an already-active sparse subtitle cue when
+seeking into it, until the next cue arrives. This check does not establish universal codec,
+HDR, DRM, or device support.
+
+Threading references: [GStreamer element operations](https://gstreamer.freedesktop.org/documentation/gstreamer/gstelement.html),
+[libmpv render API](https://github.com/mpv-player/mpv/blob/master/include/mpv/render.h).

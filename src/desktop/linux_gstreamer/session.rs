@@ -13,7 +13,45 @@ use crate::{
     Error, Result,
 };
 
-use super::{playback_timeline, NativePlayer, PLAYER};
+use super::{playback_timeline, NativePlayer, Ordering, PLAYER};
+
+/// State changes can rendezvous with the GTK sink; never block GTK waiting
+/// for those changes. Coalesce older requests and fence replacement sessions.
+pub(super) fn schedule_state(player: &NativePlayer, state: gst::State) {
+    if player.requested_state.swap(state as u8, Ordering::SeqCst) == state as u8 {
+        return;
+    }
+    let desired = Arc::clone(&player.requested_state);
+    let source = Arc::clone(&player.source);
+    let key = player.session_key.clone();
+    player.engine.submit(move |pipeline| {
+        if desired.load(Ordering::SeqCst) != state as u8 || source.read().session_key != key {
+            return;
+        }
+        if pipeline.set_state(state).is_err() {
+            gst::element_error!(
+                pipeline,
+                gst::CoreError::Failed,
+                ("Native playback state change failed")
+            );
+        }
+    });
+}
+
+pub(super) fn schedule_aspect(player: &mut NativePlayer, force: bool) {
+    if player.force_aspect == force {
+        return;
+    }
+    player.force_aspect = force;
+    let sink = player.gtk_sink.clone();
+    let source = Arc::clone(&player.source);
+    let key = player.session_key.clone();
+    player.engine.submit(move |_| {
+        if source.read().session_key == key {
+            sink.set_property("force-aspect-ratio", force);
+        }
+    });
+}
 
 pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> {
     PLAYER.with(|slot| {
@@ -25,17 +63,11 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
         match payload.action.as_str() {
             "play" => {
                 player.desired_playing = true;
-                player
-                    .pipeline
-                    .set_state(gst::State::Playing)
-                    .map_err(|error| Error::Pipeline(error.to_string()))?;
+                schedule_state(player, gst::State::Playing);
             }
             "pause" => {
                 player.desired_playing = false;
-                player
-                    .pipeline
-                    .set_state(gst::State::Paused)
-                    .map_err(|error| Error::Pipeline(error.to_string()))?;
+                schedule_state(player, gst::State::Paused);
             }
             "seek" => {
                 // GTK sinks dispatch work back to the UI thread during a
@@ -43,7 +75,7 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
                 let position = gst::ClockTime::from_nseconds((payload.value.max(0.0) * 1e9) as u64);
                 let source = Arc::clone(&player.source);
                 let session_key = payload.session_key.clone();
-                player.pipeline.call_async(move |pipeline| {
+                player.engine.submit(move |pipeline| {
                     let (transition, _, _) = pipeline.state(Some(gst::ClockTime::from_seconds(3)));
                     if source.read().session_key != session_key {
                         return;
@@ -63,20 +95,20 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
             }
             "volume" => {
                 player
-                    .pipeline
+                    .volume_filter
                     .set_property("volume", payload.value.clamp(0.0, 1.0));
             }
             "fit" => {
-                player.gtk_sink.set_property("force-aspect-ratio", true);
+                schedule_aspect(player, true);
                 player.picture.fill(false);
             }
             "crop" => {
-                player.gtk_sink.set_property("force-aspect-ratio", true);
+                schedule_aspect(player, true);
                 player.picture.fill(true);
             }
             "stretch" => {
                 player.picture.fill(false);
-                player.gtk_sink.set_property("force-aspect-ratio", false);
+                schedule_aspect(player, false);
             }
             "track" => select_stream(player, payload.index, true)?,
             "deselectTrack" => select_stream(player, payload.index, false)?,
@@ -147,12 +179,14 @@ pub fn shutdown() -> Result<()> {
             return Ok(());
         };
         player.source.write().session_key.clear();
-        let result = player
-            .pipeline
-            .set_state(gst::State::Null)
-            .map_err(|error| Error::Pipeline(error.to_string()));
+        player
+            .requested_state
+            .store(gst::State::Null as u8, Ordering::SeqCst);
+        player.engine.submit(move |pipeline| {
+            let _ = pipeline.set_state(gst::State::Null);
+        });
         player.widget.hide();
-        result.map(|_| ())
+        Ok(())
     })
 }
 
@@ -164,13 +198,15 @@ fn park_player() -> Result<()> {
         };
         player.source.write().session_key.clear();
         player
-            .pipeline
-            .set_state(gst::State::Ready)
-            .map_err(|error| Error::Pipeline(error.to_string()))?;
+            .requested_state
+            .store(gst::State::Null as u8, Ordering::SeqCst);
+        player.session_key.clear();
+        schedule_state(player, gst::State::Ready);
         player.widget.hide();
         player.session_key.clear();
         player.tracks.clear();
         player.selected_streams.clear();
+        player.pending_selection = None;
         player.error = None;
         Ok(())
     })
@@ -186,20 +222,100 @@ fn ensure_session(active: &str, requested: &str) -> Result<()> {
     }
 }
 
+#[derive(Clone, Default)]
+pub(super) struct EngineFacts {
+    position: f64,
+    duration: f64,
+    live: bool,
+    seekable: bool,
+    seekable_start: f64,
+    seekable_end: f64,
+    rendered: u64,
+    dropped: u64,
+    width: u32,
+    height: u32,
+    display_width: f64,
+}
+
+/// Queries may wait for streaming locks. Sample off GTK and copy the finished
+/// facts atomically; never hold this small cache lock during engine work.
+fn sample_engine(player: &NativePlayer) {
+    if player.telemetry_pending.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let cache = Arc::clone(&player.telemetry);
+    let pending = Arc::clone(&player.telemetry_pending);
+    let source = Arc::clone(&player.source);
+    let key = player.session_key.clone();
+    let sink = player.gtk_sink.clone();
+    player.engine.submit(move |pipeline| {
+        if source.read().session_key != key {
+            pending.store(false, Ordering::SeqCst);
+            return;
+        }
+        let position = pipeline
+            .query_position::<gst::ClockTime>()
+            .map(|time| time.seconds_f64())
+            .unwrap_or(0.0);
+        let duration = pipeline
+            .query_duration::<gst::ClockTime>()
+            .map(|time| time.seconds_f64())
+            .unwrap_or(0.0);
+        let (live, seekable, seekable_start, seekable_end) = playback_timeline(pipeline, duration);
+        let stats = sink.property::<gst::Structure>("stats");
+        let rendered = stats.get::<u64>("rendered").unwrap_or(0);
+        let dropped = stats.get::<u64>("dropped").unwrap_or(0);
+        let (width, height, display_width) = sink
+            .static_pad("sink")
+            .and_then(|pad| pad.current_caps())
+            .and_then(|caps| {
+                caps.structure(0).map(|structure| {
+                    let width = structure.get::<i32>("width").unwrap_or(0).max(0) as u32;
+                    let height = structure.get::<i32>("height").unwrap_or(0).max(0) as u32;
+                    let aspect = structure
+                        .get::<gst::Fraction>("pixel-aspect-ratio")
+                        .map(|ratio| f64::from(ratio.numer()) / f64::from(ratio.denom()))
+                        .unwrap_or(1.0);
+                    (width, height, f64::from(width) * aspect)
+                })
+            })
+            .unwrap_or((0, 0, 0.0));
+        if source.read().session_key == key {
+            *cache.lock() = EngineFacts {
+                position,
+                duration,
+                live,
+                seekable,
+                seekable_start,
+                seekable_end,
+                rendered,
+                dropped,
+                width,
+                height,
+                display_width,
+            };
+        }
+        pending.store(false, Ordering::SeqCst);
+    });
+}
+
 pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapshot> {
+    if !player.engine.alive.load(Ordering::Acquire) {
+        return Err(Error::RuntimeUnavailable(
+            "native engine worker stopped".into(),
+        ));
+    }
     drain_bus(player)?;
-    let position = player
-        .pipeline
-        .query_position::<gst::ClockTime>()
-        .map(|time| time.seconds_f64())
-        .unwrap_or(0.0);
-    let duration = player
-        .pipeline
-        .query_duration::<gst::ClockTime>()
-        .map(|time| time.seconds_f64())
-        .unwrap_or(0.0);
-    let (live, seekable, seekable_start, seekable_end) =
-        playback_timeline(&player.pipeline, duration);
+    sample_engine(player);
+    let facts = player.telemetry.lock().clone();
+    let position = facts.position;
+    let duration = facts.duration;
+    let (live, seekable, seekable_start, seekable_end) = (
+        facts.live,
+        facts.seekable,
+        facts.seekable_start,
+        facts.seekable_end,
+    );
     let buffered = position
         + player.buffer_duration_seconds.unwrap_or(0.0) * player.buffering_percent as f64 / 100.0;
     let buffered = if live {
@@ -212,9 +328,8 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
     } else {
         duration.max(buffered)
     };
-    let structure = player.gtk_sink.property::<gst::Structure>("stats");
-    let rendered = structure.get::<u64>("rendered").unwrap_or(0);
-    let dropped = structure.get::<u64>("dropped").unwrap_or(0);
+    let rendered = facts.rendered;
+    let dropped = facts.dropped;
     let now = Instant::now();
     let elapsed = now.duration_since(player.last_sample_at).as_secs_f64();
     if elapsed >= 0.5 {
@@ -229,22 +344,8 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
             "GStreamer playback telemetry"
         );
     }
-    let (video_width, video_height, display_width) = player
-        .gtk_sink
-        .static_pad("sink")
-        .and_then(|pad| pad.current_caps())
-        .and_then(|caps| {
-            caps.structure(0).map(|structure| {
-                let width = structure.get::<i32>("width").unwrap_or(0).max(0) as u32;
-                let height = structure.get::<i32>("height").unwrap_or(0).max(0) as u32;
-                let pixel_aspect = structure
-                    .get::<gst::Fraction>("pixel-aspect-ratio")
-                    .map(|ratio| f64::from(ratio.numer()) / f64::from(ratio.denom()))
-                    .unwrap_or(1.0);
-                (width, height, f64::from(width) * pixel_aspect)
-            })
-        })
-        .unwrap_or((0, 0, 0.0));
+    let (video_width, video_height, display_width) =
+        (facts.width, facts.height, facts.display_width);
     player
         .picture
         .source_size(display_width, f64::from(video_height));
@@ -287,10 +388,7 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                 } else {
                     gst::State::Paused
                 };
-                player
-                    .pipeline
-                    .set_state(target)
-                    .map_err(|error| Error::Pipeline(error.to_string()))?;
+                schedule_state(player, target);
             }
             gst::MessageView::StreamCollection(message) => {
                 let collection = message.stream_collection();
@@ -355,6 +453,29 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                 for track in &mut player.tracks {
                     track.selected = player.selected_streams.contains(&track.id);
                 }
+                if player.pending_selection.as_ref() == Some(&player.selected_streams) {
+                    player.pending_selection = None;
+                    // A new subtitle branch can retain an unseeked segment while
+                    // video uses the previous seek's running-time offset. Reset
+                    // the complete seekable timeline only after selection is
+                    // confirmed, so the newly activated branch receives it too.
+                    let source = Arc::clone(&player.source);
+                    let key = player.session_key.clone();
+                    player.engine.submit(move |pipeline| {
+                        if source.read().session_key != key {
+                            return;
+                        }
+                        let mut seeking = gst::query::Seeking::new(gst::Format::Time);
+                        if pipeline.query(&mut seeking) && seeking.result().0 {
+                            if let Some(position) = pipeline.query_position::<gst::ClockTime>() {
+                                let _ = pipeline.seek_simple(
+                                    gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                                    position,
+                                );
+                            }
+                        }
+                    });
+                }
                 tracing::debug!(
                     count = player.selected_streams.len(),
                     "GStreamer streams selected"
@@ -381,7 +502,11 @@ fn select_stream(player: &mut NativePlayer, index: i32, enabled: bool) -> Result
         .find(|track| track.index == index)
         .map(|track| (track.kind, track.id.clone()))
         .ok_or_else(|| Error::InvalidRequest(format!("unknown native track index {index}")))?;
-    player.selected_streams.retain(|id| {
+    let mut selected = player
+        .pending_selection
+        .clone()
+        .unwrap_or_else(|| player.selected_streams.clone());
+    selected.retain(|id| {
         player
             .tracks
             .iter()
@@ -389,17 +514,25 @@ fn select_stream(player: &mut NativePlayer, index: i32, enabled: bool) -> Result
             .is_some_and(|item| item.kind != kind)
     });
     if enabled {
-        player.selected_streams.insert(id);
+        selected.insert(id);
     }
-    let ids: Vec<&str> = player.selected_streams.iter().map(String::as_str).collect();
-    if !player
-        .pipeline
-        .send_event(gst::event::SelectStreams::new(ids))
-    {
-        return Err(Error::Pipeline("decoder rejected track selection".into()));
-    }
-    for item in &mut player.tracks {
-        item.selected = player.selected_streams.contains(&item.id);
-    }
+    let ids: Vec<String> = selected.iter().cloned().collect();
+    player.pending_selection = Some(selected);
+    let source = Arc::clone(&player.source);
+    let key = player.session_key.clone();
+    player.engine.submit(move |pipeline| {
+        if source.read().session_key != key {
+            return;
+        }
+        if !pipeline.send_event(gst::event::SelectStreams::new(
+            ids.iter().map(String::as_str),
+        )) {
+            gst::element_error!(
+                pipeline,
+                gst::CoreError::Failed,
+                ("Native track selection failed")
+            );
+        }
+    });
     Ok(())
 }

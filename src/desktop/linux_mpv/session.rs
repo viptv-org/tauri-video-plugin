@@ -62,6 +62,9 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
                 )))
             }
         }
+        if matches!(payload.action.as_str(), "fit" | "crop" | "stretch" | "zoom") {
+            schedule_layout_render(player);
+        }
         snapshot(player)
     })
 }

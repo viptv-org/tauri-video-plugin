@@ -267,3 +267,11 @@ use unavailable_linux_backend as linux_gstreamer;
     any(not(feature = "mpv-runtime"), not(feature = "gstreamer-runtime"))
 ))]
 mod unavailable_linux_backend;
+
+#[cfg(all(
+    test,
+    target_os = "linux",
+    feature = "gstreamer-runtime",
+    feature = "mpv-runtime"
+))]
+mod native_surface_tests;
