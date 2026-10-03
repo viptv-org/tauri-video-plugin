@@ -194,7 +194,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
     gl_area.realize();
     gl_area.make_current();
     if let Some(error) = gl_area.error() {
-        return Err(Error::Pipeline(format!(
+        return Err(Error::VideoOutput(format!(
             "could not create the mpv OpenGL surface: {error}"
         )));
     }

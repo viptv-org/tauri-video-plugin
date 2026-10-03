@@ -217,7 +217,13 @@ or included in `Debug` output.
 | `PROTOCOL_MISMATCH` | client/plugin protocol or package metadata mismatch | no | `protocol` |
 | `INVALID_REQUEST` | malformed request, stale session key, rejected authorization, unknown backend/action | no | — |
 | `RUNTIME_UNAVAILABLE` | requested engine not compiled or its runtime failed to initialize | no | — |
-| `PIPELINE_FAILED` | the engine could not demux/decode this delivery, or the native UI dispatcher failed/timed out (15 s) | yes | `pipeline` |
+| `PIPELINE_FAILED` | a pipeline, operation or native UI dispatcher failure whose cause is not known to be decoding | yes | `pipeline` |
+| `DECODE_FAILED` | an explicit decoder/codec failure | yes | `decode` |
+| `MEDIA_FORMAT_FAILED` | the source did not provide recognizable media | no | `decode` |
+| `VIDEO_OUTPUT_FAILED` | native video surface initialization or rendering failed | no | `video-output` |
+| `AUDIO_OUTPUT_FAILED` | native audio output initialization failed | no | `audio-output` |
+| `PROTECTED_MEDIA` | media decryption/key access failed | no | — |
+| `SOURCE_OPEN_FAILED` | source loading failed without a more specific cause | no | — |
 | `AUTHORIZATION_FAILED` | the origin refused authorization (GStreamer `NotAuthorized`) | no | — |
 | `CONNECTION_FAILED` | the origin could not be read (`OpenRead`, `Read`, `Close`, `Busy`, …) | yes | — |
 | `SOURCE_UNAVAILABLE` | the source is missing or expired (`NotFound`) | no | — |

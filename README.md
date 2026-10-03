@@ -57,3 +57,16 @@ HDR, DRM, or device support.
 
 Threading references: [GStreamer element operations](https://gstreamer.freedesktop.org/documentation/gstreamer/gstelement.html),
 [libmpv render API](https://github.com/mpv-player/mpv/blob/master/include/mpv/render.h).
+
+## Failure classification
+
+Generic pipeline failures do not establish a decoder problem. The unchanged
+wire shape carries distinct codes for explicit decoder/format failures, video
+and audio output, protected media, source loading, runtime setup, authorization
+and network failures. GStreamer classification uses its typed error domains;
+MPV classification uses numeric API errors. Raw runtime messages remain private.
+
+Set `VIPTV_NATIVE_FAILURE_RECOVERY=1` for the opt-in GTK control check to first
+open a missing source, verify a source failure rather than a decoder diagnosis,
+and then open valid media in the same engine. Both engines pass this failure
+and replacement sequence on the local desktop display.

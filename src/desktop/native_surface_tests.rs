@@ -118,6 +118,47 @@ fn real_provider_native_surface_controls() {
             payload.muted = true;
             payload.volume = 0.0;
             let key = payload.session_key.clone();
+            if std::env::var_os("VIPTV_NATIVE_FAILURE_RECOVERY").is_some() && index == 0 {
+                let mut missing = payload.clone();
+                missing.session_key = format!("failed-{engine}");
+                missing.uri = "file:///viptv-qualification-missing-source.mkv".into();
+                missing.headers.clear();
+                missing.cookies = None;
+                missing.user_agent = None;
+                let failed_key = missing.session_key.clone();
+                let result = if engine == "gstreamer" {
+                    gst::open_player(missing)
+                } else {
+                    mpv::open_player(missing)
+                };
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => loop {
+                        pump();
+                        if let Err(error) = stats(engine, &failed_key) {
+                            break error;
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "{engine}: missing source never failed"
+                        );
+                    },
+                };
+                assert!(
+                    !error.to_string().contains("decode"),
+                    "{engine}: missing source mislabeled as decoder failure"
+                );
+                println!("{engine}: missing source reported {}", error.code());
+                let request = NativeSessionRequest {
+                    session_key: failed_key,
+                };
+                if engine == "gstreamer" {
+                    gst::close(request).unwrap();
+                } else {
+                    mpv::close(request).unwrap();
+                }
+            }
             let (payload, pending) = source_proxy::route(payload);
             let opened = if engine == "gstreamer" {
                 gst::open_player(payload)
