@@ -96,7 +96,10 @@ impl Drop for MpvPlayer {
             self.gl_area.disconnect(signal);
         }
         // libmpv requires its render context to be destroyed before the
-        // owning mpv handle.
+        // owning mpv handle, with the same OpenGL context current as at
+        // creation. GTK/WebKit may have selected another context since our
+        // last render callback.
+        self.gl_area.make_current();
         *self.render_context.borrow_mut() = None;
         self.widget.hide();
     }
@@ -221,6 +224,13 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
     let update_area = gl_area.clone();
     let context_for_update = Rc::clone(&render_context);
     let update_source = redraw_receiver.attach(None, move |_| {
+        // This runs from GLib's idle queue, not GtkGLArea::render. libmpv's
+        // render API requires its owning GL context for update as well.
+        update_area.make_current();
+        if let Some(error) = update_area.error() {
+            tracing::warn!(%error, "mpv render update context unavailable");
+            return gtk::glib::ControlFlow::Continue;
+        }
         let update = context_for_update
             .borrow()
             .as_ref()

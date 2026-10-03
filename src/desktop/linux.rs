@@ -42,6 +42,9 @@ pub fn open<R: Runtime>(
     };
     if result.is_ok() {
         ACTIVE_BACKEND.with(|active| *active.borrow_mut() = Some(requested));
+    } else if ACTIVE_BACKEND.with(|active| active.borrow().is_none()) {
+        #[cfg(any(feature = "gstreamer-runtime", feature = "mpv-runtime"))]
+        super::linux_surface::restore_backing();
     }
     result
 }
@@ -55,6 +58,8 @@ pub fn shutdown() -> Result<()> {
     // then destroys the render context before its owning libmpv handle.
     let mpv = super::linux_mpv::force_close();
     ACTIVE_BACKEND.with(|active| *active.borrow_mut() = None);
+    #[cfg(any(feature = "gstreamer-runtime", feature = "mpv-runtime"))]
+    super::linux_surface::restore_backing();
     gstreamer.and(mpv)
 }
 
@@ -87,6 +92,8 @@ pub fn close(payload: NativeSessionRequest) -> Result<()> {
     };
     if released {
         ACTIVE_BACKEND.with(|active| *active.borrow_mut() = None);
+        #[cfg(any(feature = "gstreamer-runtime", feature = "mpv-runtime"))]
+        super::linux_surface::restore_backing();
     }
     Ok(())
 }
