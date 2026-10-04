@@ -374,6 +374,7 @@ mod tests {
     #[test]
     #[cfg(all(feature = "gstreamer-runtime", any(target_os = "linux", windows)))]
     fn bus_failures_preserve_http_status_and_negotiation_without_private_details() {
+        gstreamer::init().unwrap();
         let message =
             gstreamer::message::Error::builder(gstreamer::ResourceError::Read, "private source")
                 .details(
