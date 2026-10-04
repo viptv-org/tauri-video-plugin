@@ -428,6 +428,9 @@ fn load_source(player: &mut NativePlayer, payload: &NativeOpenRequest) -> Result
         payload.height,
     )?;
 
+    // The previous sink texture can survive READY. Reveal only after telemetry
+    // observes decoded frames for the newly loaded source.
+    player.widget.hide();
     player.buffering_percent = 0;
     player.buffer_duration_seconds = buffer_duration_seconds;
     player.target_buffer_bytes = target_buffer_bytes;

@@ -275,9 +275,19 @@ fn refresh_tracks(player: &mut MpvPlayer) {
         };
         let mpv_id = property::<i64>(&player.mpv, &format!("{prefix}/id")).unwrap_or(source_index);
         let public_index = tracks.len() as i32;
-        let language = property::<String>(&player.mpv, &format!("{prefix}/lang"))
-            .unwrap_or_else(|| "und".into());
+        let language =
+            property::<String>(&player.mpv, &format!("{prefix}/lang")).unwrap_or_default();
+        let language = if language.eq_ignore_ascii_case("und") {
+            String::new()
+        } else {
+            language
+        };
         let title = property::<String>(&player.mpv, &format!("{prefix}/title")).unwrap_or_default();
+        let title = if title.eq_ignore_ascii_case("und") {
+            String::new()
+        } else {
+            title
+        };
         let codec = property::<String>(&player.mpv, &format!("{prefix}/codec")).unwrap_or_default();
         let selected =
             property::<bool>(&player.mpv, &format!("{prefix}/selected")).unwrap_or(false);
@@ -287,8 +297,20 @@ fn refresh_tracks(player: &mut MpvPlayer) {
             kind,
             language: language.clone(),
             label: if title.is_empty() {
-                if language == "und" {
-                    track_type.clone()
+                if language.is_empty() {
+                    format!(
+                        "{} {}",
+                        match kind {
+                            TrackKind::Audio => "Audio",
+                            TrackKind::Video => "Video",
+                            TrackKind::Subtitle => "Subtitle",
+                        },
+                        tracks
+                            .iter()
+                            .filter(|track: &&NativeTrackInfo| track.kind == kind)
+                            .count()
+                            + 1
+                    )
                 } else {
                     language.to_uppercase()
                 }

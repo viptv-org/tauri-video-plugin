@@ -178,6 +178,7 @@ pub fn shutdown() -> Result<()> {
         let Some(player) = slot.borrow_mut().take() else {
             return Ok(());
         };
+        player.volume_filter.set_property("volume", 0.0_f64);
         player.source.write().session_key.clear();
         player
             .requested_state
@@ -196,6 +197,7 @@ fn park_player() -> Result<()> {
         let Some(player) = slot.as_mut() else {
             return Ok(());
         };
+        player.volume_filter.set_property("volume", 0.0_f64);
         player.source.write().session_key.clear();
         player
             .requested_state
@@ -235,6 +237,7 @@ pub(super) struct EngineFacts {
     width: u32,
     height: u32,
     display_width: f64,
+    buffered_end: f64,
 }
 
 /// Queries may wait for streaming locks. Sample off GTK and copy the finished
@@ -253,15 +256,102 @@ fn sample_engine(player: &NativePlayer) {
             pending.store(false, Ordering::SeqCst);
             return;
         }
+        let previous = cache.lock().clone();
         let position = pipeline
             .query_position::<gst::ClockTime>()
             .map(|time| time.seconds_f64())
-            .unwrap_or(0.0);
+            .unwrap_or(previous.position);
         let duration = pipeline
             .query_duration::<gst::ClockTime>()
             .map(|time| time.seconds_f64())
-            .unwrap_or(0.0);
+            .filter(|value| *value > 0.0)
+            .unwrap_or(previous.duration);
         let (live, seekable, seekable_start, seekable_end) = playback_timeline(pipeline, duration);
+        let mut buffering = gst::query::Buffering::new(gst::Format::Time);
+        let buffered_end = if pipeline.query(&mut buffering) {
+            buffering
+                .ranges()
+                .map(|(_, end)| end.value())
+                .chain(std::iter::once(buffering.range().1.value()))
+                .filter(|value| *value >= 0)
+                .max()
+                .map(|value| value as f64 / 1e9)
+                .unwrap_or(position)
+        } else {
+            position
+        };
+        // Decoded/encoded AV queues expose media-time lead even when the
+        // progressive-download query cannot describe this source's ranges.
+        let mut queued = 0u64;
+        if let Ok(bin) = gst::glib::prelude::Cast::dynamic_cast::<gst::Bin>(pipeline.clone()) {
+            for element in bin.iterate_recurse().into_iter().flatten() {
+                if element.find_property("current-level-time").is_some() {
+                    let av = element
+                        .static_pad("src")
+                        .and_then(|pad| pad.current_caps())
+                        .and_then(|caps| {
+                            caps.structure(0).map(|s| {
+                                s.name().starts_with("audio/") || s.name().starts_with("video/")
+                            })
+                        })
+                        .unwrap_or(false);
+                    if av {
+                        queued = queued.max(element.property::<u64>("current-level-time"));
+                    }
+                }
+                if element.factory().is_some_and(|factory| {
+                    gst::prelude::GstObjectExt::name(&factory) == "multiqueue"
+                }) {
+                    let levels = element.property::<gst::Structure>("stats");
+                    if let Ok(queues) = levels.get::<gst::Array>("queues") {
+                        for value in queues.as_slice() {
+                            if let Ok(queue) = value.get::<gst::Structure>() {
+                                if let Ok(id) = queue.get::<u32>("id") {
+                                    let av = element
+                                        .static_pad(&format!("src_{id}"))
+                                        .and_then(|pad| pad.current_caps())
+                                        .and_then(|caps| {
+                                            caps.structure(0).map(|s| {
+                                                s.name().starts_with("audio/")
+                                                    || s.name().starts_with("video/")
+                                            })
+                                        })
+                                        .unwrap_or(false);
+                                    if av {
+                                        let caps = element
+                                            .static_pad(&format!("src_{id}"))
+                                            .and_then(|pad| pad.current_caps());
+                                        let encoded = caps
+                                            .as_ref()
+                                            .and_then(|caps| caps.structure(0))
+                                            .is_some_and(|s| {
+                                                s.name() != "video/x-raw"
+                                                    && s.name() != "audio/x-raw"
+                                            });
+                                        // Grow only compressed AV queues, never decoded frames.
+                                        // This gives the direct engine a useful, bounded cache.
+                                        if encoded
+                                            && element.property::<u64>("max-size-time")
+                                                < 30_000_000_000
+                                        {
+                                            element
+                                                .set_property("max-size-time", 30_000_000_000u64);
+                                            element.set_property(
+                                                "max-size-bytes",
+                                                32 * 1024 * 1024u32,
+                                            );
+                                            element.set_property("max-size-buffers", 0u32);
+                                        }
+                                        queued = queued.max(queue.get::<u64>("time").unwrap_or(0));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let buffered_end = buffered_end.max(position + queued as f64 / 1e9);
         let stats = sink.property::<gst::Structure>("stats");
         let rendered = stats.get::<u64>("rendered").unwrap_or(0);
         let dropped = stats.get::<u64>("dropped").unwrap_or(0);
@@ -293,6 +383,7 @@ fn sample_engine(player: &NativePlayer) {
                 width,
                 height,
                 display_width,
+                buffered_end,
             };
         }
         pending.store(false, Ordering::SeqCst);
@@ -316,12 +407,11 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
         facts.seekable_start,
         facts.seekable_end,
     );
-    let buffered = position
-        + player.buffer_duration_seconds.unwrap_or(0.0) * player.buffering_percent as f64 / 100.0;
-    let buffered = if live {
-        buffered.max(position)
+    let buffered = facts.buffered_end.max(position);
+    let buffered = if duration > 0.0 {
+        buffered.min(duration)
     } else {
-        buffered.min(duration.max(position))
+        buffered
     };
     let seekable_end = if seekable_end > seekable_start {
         seekable_end
@@ -349,6 +439,9 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
     player
         .picture
         .source_size(display_width, f64::from(video_height));
+    if video_width > 0 && rendered > 0 {
+        player.widget.show_all();
+    }
     let playing = player.desired_playing;
     Ok(NativePlaybackSnapshot {
         duration_seconds: duration,
@@ -417,14 +510,32 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                         .and_then(|tags| tags.get::<gst::tags::LanguageCode>())
                         .map(|tag| tag.get().to_string())
                         .unwrap_or_default();
+                    let language = if language.eq_ignore_ascii_case("und") {
+                        String::new()
+                    } else {
+                        language
+                    };
                     let label = tags
                         .as_ref()
                         .and_then(|tags| tags.get::<gst::tags::Title>())
                         .map(|tag| tag.get().to_string())
-                        .filter(|value| !value.is_empty())
+                        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("und"))
                         .unwrap_or_else(|| {
                             if language.is_empty() {
-                                format!("Track {}", index + 1)
+                                format!(
+                                    "{} {}",
+                                    match kind {
+                                        TrackKind::Audio => "Audio",
+                                        TrackKind::Video => "Video",
+                                        TrackKind::Subtitle => "Subtitle",
+                                    },
+                                    player
+                                        .tracks
+                                        .iter()
+                                        .filter(|track| track.kind == kind)
+                                        .count()
+                                        + 1
+                                )
                             } else {
                                 language.to_uppercase()
                             }

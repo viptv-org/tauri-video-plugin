@@ -170,7 +170,7 @@ fn real_provider_native_surface_controls() {
             let s = until(engine, &key, "decode", 20, |s| {
                 s.video_width > 0 && s.presented_frames > 2 && s.current_time_seconds > 0.2
             });
-            println!("{engine} {alias}: decoded dimensions={}x{} frames={} time={:.2} duration={:.2} tracks={}",s.video_width,s.video_height,s.presented_frames,s.current_time_seconds,s.duration_seconds,s.tracks.len());
+            println!("{engine} {alias}: decoded dimensions={}x{} frames={} time={:.2} duration={:.2} buffered={:.2} tracks={}",s.video_width,s.video_height,s.presented_frames,s.current_time_seconds,s.duration_seconds,s.buffered_seconds,s.tracks.len());
             if alias.contains("vod") || alias.contains("fixture") {
                 let target = 30.0_f64.min(s.duration_seconds * 0.3).max(2.0);
                 let started = Instant::now();
