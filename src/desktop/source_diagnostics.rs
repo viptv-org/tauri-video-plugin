@@ -585,14 +585,11 @@ mod tests {
     #[test]
     fn body_redaction_handles_nested_truncated_and_unicode_content() {
         let request = request();
-        assert_eq!(
-            safe_excerpt(
-                r#"{"error":"refused","nested":{"session_id":"private"}}"#,
-                &request
-            )
-            .contains("private"),
-            false
-        );
+        assert!(!safe_excerpt(
+            r#"{"error":"refused","nested":{"session_id":"private"}}"#,
+            &request
+        )
+        .contains("private"));
         assert_eq!(
             safe_excerpt(r#"{"password":"truncated"#, &request),
             "Response was truncated or was not valid JSON."

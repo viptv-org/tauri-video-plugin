@@ -413,7 +413,7 @@ pub(super) fn mpv_error(error: libmpv2::Error) -> Error {
             }
             libmpv2::mpv_error::LoadingFailed => Error::SourceDiagnostic {
                 code: "SOURCE_OPEN_FAILED",
-                message: format!("MPV media load failed (loading-failed/{}).", code as i32),
+                message: format!("MPV media load failed (loading-failed/{code})."),
                 original: Box::new(Error::SourceOpenFailed),
             },
             libmpv2::mpv_error::InvalidParameter => {
@@ -421,7 +421,7 @@ pub(super) fn mpv_error(error: libmpv2::Error) -> Error {
             }
             _ => Error::SourceDiagnostic {
                 code: "PIPELINE_FAILED",
-                message: format!("MPV operation failed ({code:?}/{}).", code as i32),
+                message: format!("MPV operation failed ({code:?}/{code})."),
                 original: Box::new(Error::Pipeline("mpv operation failed".into())),
             },
         },

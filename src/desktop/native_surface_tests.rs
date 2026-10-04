@@ -30,6 +30,70 @@ fn settle_picture() {
         pump();
     }
 }
+
+#[test]
+#[ignore = "GTK display, private cases, VIPTV_NATIVE_CASE_INDEX and VIPTV_NATIVE_ENGINE required"]
+fn real_movie_surface_case() {
+    gtk::init().unwrap();
+    let path = std::env::var("VIPTV_NATIVE_PROVIDER_CASES").unwrap();
+    let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let index: usize = std::env::var("VIPTV_NATIVE_CASE_INDEX")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let engine = std::env::var("VIPTV_NATIVE_ENGINE").unwrap();
+    assert!(matches!(engine.as_str(), "mpv" | "gstreamer"));
+    let case = &cases[index];
+    let alias = case["alias"].as_str().unwrap();
+    let mut payload: NativeOpenRequest = serde_json::from_value(case["payload"].clone()).unwrap();
+    payload.width = 320.0;
+    payload.height = 180.0;
+    let start = payload.start_at_seconds;
+    let key = payload.session_key.clone();
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
+    window.set_default_size(320, 180);
+    window.move_((index % 5) as i32 * 360, (index / 5) as i32 * 230);
+    let fixed = gtk::Fixed::new();
+    window.add(&fixed);
+    window.show_all();
+    super::linux_surface::install_qualification_host(fixed);
+    let (payload, pending) = source_proxy::route(payload);
+    let opened = if engine == "mpv" {
+        mpv::open_player(payload)
+    } else {
+        gst::open_player(payload)
+    };
+    source_proxy::settle(pending, opened.is_ok());
+    opened.unwrap();
+    // mpv owns the initial position; GStreamer currently uses the adapter's
+    // explicit seek after open. Keep this test on those actual native paths.
+    if engine == "gstreamer" && start > 0.0 {
+        control(&engine, &key, "seek", start, 0).unwrap();
+    }
+    let decoded = until(&engine, &key, alias, 45, |s| {
+        s.presented_frames > 2 && s.video_width > 0 && s.current_time_seconds > start + 0.2
+    });
+    println!(
+        "{engine} {alias}: rendered frames={} time={:.2} dimensions={}x{}",
+        decoded.presented_frames,
+        decoded.current_time_seconds,
+        decoded.video_width,
+        decoded.video_height
+    );
+    control(&engine, &key, "pause", 0.0, 0).unwrap();
+    let paused = until(&engine, &key, "pause", 10, |s| !s.playing);
+    control(&engine, &key, "play", 0.0, 0).unwrap();
+    until(&engine, &key, "resume", 15, |s| {
+        s.current_time_seconds > paused.current_time_seconds + 0.2
+    });
+    let request = NativeSessionRequest { session_key: key };
+    if engine == "mpv" {
+        mpv::close(request).unwrap();
+    } else {
+        gst::close(request).unwrap();
+    }
+    println!("{engine} {alias}: PASS native surface, initial position, pause, resume, close");
+}
 fn stats(engine: &str, key: &str) -> crate::Result<NativePlaybackSnapshot> {
     let request = NativeSessionRequest {
         session_key: key.into(),

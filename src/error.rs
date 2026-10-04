@@ -221,7 +221,11 @@ impl NativeMediaFailure {
                 domain,
                 native_code,
             },
-            classified.into_error().code(),
+            if component == "video output" && error.kind::<ResourceError>().is_some() {
+                "VIDEO_OUTPUT_FAILED"
+            } else {
+                classified.into_error().code()
+            },
             http_status,
         )
     }
@@ -285,6 +289,9 @@ impl NativeMediaFailure {
                         "MEDIA_FORMAT_FAILED" => Self::MediaFormat.into_error(),
                         "RUNTIME_UNAVAILABLE" => Self::Runtime.into_error(),
                         "PROTECTED_MEDIA" => Self::Protected.into_error(),
+                        "VIDEO_OUTPUT_FAILED" => {
+                            Error::VideoOutput("Native graphics resource unavailable".into())
+                        }
                         _ => Error::PipelineFault(fault),
                     }
                 };
@@ -369,6 +376,25 @@ mod tests {
             assert_eq!(failure.code(), code);
             assert!(!format!("{failure:?}").contains("private.invalid"));
         }
+    }
+
+    #[test]
+    #[cfg(all(feature = "gstreamer-runtime", target_os = "linux"))]
+    fn missing_graphics_resources_are_not_reported_as_missing_movies() {
+        gstreamer::init().unwrap();
+        let upload = gstreamer::ElementFactory::make("glupload").build().unwrap();
+        let message = gstreamer::message::Error::builder(
+            gstreamer::ResourceError::NotFound,
+            "graphics context unavailable",
+        )
+        .src(&upload)
+        .build();
+        let gstreamer::MessageView::Error(error) = message.view() else {
+            panic!("expected error")
+        };
+        let failure = NativeMediaFailure::from_bus(error).into_error();
+        assert_eq!(failure.code(), "VIDEO_OUTPUT_FAILED");
+        assert!(!failure.to_string().contains("source is unavailable"));
     }
 
     #[test]

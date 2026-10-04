@@ -76,11 +76,31 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
                 let source = Arc::clone(&player.source);
                 let session_key = payload.session_key.clone();
                 player.engine.submit(move |pipeline| {
-                    let (transition, _, _) = pipeline.state(Some(gst::ClockTime::from_seconds(3)));
+                    // A network movie can still be preparing after three
+                    // seconds. A timed-out state query returns Ok(Async), so
+                    // testing only is_err() dispatched the seek in READY and
+                    // turned a healthy source into a terminal pipeline error.
+                    let deadline = Instant::now() + std::time::Duration::from_secs(15);
+                    let ready = loop {
+                        if source.read().session_key != session_key {
+                            return;
+                        }
+                        let (transition, current, _) =
+                            pipeline.state(Some(gst::ClockTime::from_mseconds(100)));
+                        if transition.is_err() {
+                            break false;
+                        }
+                        if matches!(current, gst::State::Paused | gst::State::Playing) {
+                            break true;
+                        }
+                        if Instant::now() >= deadline {
+                            break false;
+                        }
+                    };
                     if source.read().session_key != session_key {
                         return;
                     }
-                    if transition.is_err()
+                    if !ready
                         || pipeline
                             .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, position)
                             .is_err()
