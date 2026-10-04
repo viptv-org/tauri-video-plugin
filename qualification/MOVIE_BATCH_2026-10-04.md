@@ -23,10 +23,39 @@ GStreamer engine decoding passed **20/20** for the same deliveries. Native
 surface testing also exposed a seek-before-preroll race: `state(3 seconds)`
 can return `Ok(Async)` while the pipeline is still READY. The native worker now
 waits for PAUSED/PLAYING with a fifteen-second bound and checks replacement
-ownership every 100 ms. The last full surface run passed **15/20**; the other
+ownership every 100 ms. Before the follow-up graphics fix, a full surface run passed **15/20**; the other
 five failed in graphics output, rather than the initial seek. Missing GL
 resources were previously mislabeled as missing movies; their error code is
 now `VIDEO_OUTPUT_FAILED`, covered by a failing-then-passing bus regression.
+
+## Follow-up: graphics upload failures resolved
+
+The graphics failures also reproduced with one real movie, independently of
+concurrency. A fresh baseline passed 16/20 surfaces; the same movie failed
+alone with `glupload` reporting RESOURCE/NOT_FOUND. Instrumentation identified
+the [upstream upload error](https://github.com/GStreamer/gstreamer/blob/1.28.7/subprojects/gst-plugins-base/ext/gl/gstgluploadelement.c#L317)
+as `Failed to upload buffer`, rather than GL
+context initialization failure. Keeping the surface visible did not fix it.
+Disabling VA decoding made the affected movie pass, establishing the hardware
+decoded buffer-to-GL boundary as the failing path.
+
+A SystemMemory capsfilter alone still failed. The production player now uses
+`videoconvert ! video/x-raw,format=RGBA` as its playbin video filter, making an
+RGBA frame available before the GL upload. This retains native hardware
+decoding and the existing GL rendering/subtitle path while removing the
+requirement to import decoder buffers directly. It adds CPU conversion and
+memory transfer work. Temporary probes observed VA hardware decoding in
+**20/20** successful real-movie surface cases and were removed afterward.
+
+The graphics fix passed **20/20 GStreamer native surfaces concurrently** for
+the unchanged final movie corpus, including all five previously failing cases.
+The missing-source/recovery fixture also passed on both MPV and GStreamer,
+covering seek, pause/resume, alternate audio/subtitle selection, rendered
+caption pixels, subtitle removal, paused Fit/Fill, and volume. Normal plugin
+tests and Clippy passed, as did 37 tests with native engine features disabled.
+The final MPV native surface rerun also passed **20/20 concurrently**.
+The five previously recorded graphics failures are
+closed for these tested paths.
 
 Initial discovery batches also exposed unavailable accounts/sources returning
 JSON or HTML with HTTP 200, 503 and 512. Both decoders rejected those bodies.

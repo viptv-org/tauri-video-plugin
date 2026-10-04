@@ -185,6 +185,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
         .property("sink", &terminal_sink)
         .build()
         .map_err(|error| Error::Pipeline(format!("glsinkbin is unavailable: {error}")))?;
+    let upload_filter = gtk_upload_filter()?;
     let buffer_duration_seconds = payload
         .max_buffer_ms
         .map(|value| f64::from(value.clamp(3_000, 120_000)) / 1_000.0);
@@ -207,6 +208,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
     let mut pipeline_builder = gst::ElementFactory::make("playbin3")
         .property("uri", &payload.uri)
         .property("video-sink", &gl_sink)
+        .property("video-filter", &upload_filter)
         .property("audio-filter", &volume_filter);
     if let Some(seconds) = buffer_duration_seconds {
         pipeline_builder =
@@ -272,6 +274,44 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
     };
     load_source(&mut player, payload)?;
     Ok(player)
+}
+
+/// Hardware-decoded buffers can be incompatible with the GTK GL import path,
+/// even after negotiating nominal SystemMemory caps.
+/// Materialize the existing renderer's RGBA input before glupload, retaining
+/// hardware decoding while making the rendering boundary independent of DMA
+/// import support. A capsfilter alone does not materialize those buffers.
+fn gtk_upload_filter() -> Result<gst::Bin> {
+    let convert = gst::ElementFactory::make("videoconvert")
+        .build()
+        .map_err(|_| Error::RuntimeUnavailable("native video converter unavailable".into()))?;
+    let caps = gst::Caps::builder("video/x-raw")
+        .field("format", "RGBA")
+        .build();
+    let filter = gst::ElementFactory::make("capsfilter")
+        .property("caps", caps)
+        .build()
+        .map_err(|_| Error::RuntimeUnavailable("native video memory filter unavailable".into()))?;
+    let bin = gst::Bin::new();
+    bin.add_many([&convert, &filter])
+        .map_err(|_| Error::Pipeline("native video upload chain unavailable".into()))?;
+    gst::Element::link_many([&convert, &filter])
+        .map_err(|_| Error::Pipeline("native video upload chain could not link".into()))?;
+    for (name, element) in [("sink", &convert), ("src", &filter)] {
+        let target = element
+            .static_pad(name)
+            .ok_or_else(|| Error::Pipeline("native video upload pad unavailable".into()))?;
+        let ghost = gst::GhostPad::builder_with_target(&target)
+            .map_err(|_| Error::Pipeline("native video upload pad unavailable".into()))?
+            .name(name)
+            .build();
+        ghost
+            .set_active(true)
+            .map_err(|_| Error::Pipeline("native video upload pad could not activate".into()))?;
+        bin.add_pad(&ghost)
+            .map_err(|_| Error::Pipeline("native video upload pad could not attach".into()))?;
+    }
+    Ok(bin)
 }
 
 fn subtitle_safe_gtk_sink(gtk_sink: &gst::Element) -> Result<gst::Element> {

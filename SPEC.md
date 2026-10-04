@@ -239,6 +239,11 @@ runtime facts of the installed engine and hardware.
   `GtkGLArea` (`mpv-runtime`, explicit). TLS trust: `tlsCaFile` loads a GIO
   file database on GStreamer (a load failure is logged and the system trust is
   kept) and maps to mpv `tls-ca-file`.
+  GStreamer materializes RGBA SystemMemory through `videoconvert` before GL
+  upload, so hardware decoder buffers need not support direct import into the
+  GTK GL context. Decoder selection stays native; this compatibility transfer
+  adds CPU conversion/copy work. The existing GL subtitle compositor and
+  picture viewport remain downstream of it.
 - **Windows:** GStreamer with D3D11 decoding presented as a WebView2 texture
   stream on the real `<video>` element. `native_prepare_texture_stream` must
   succeed before `native_open` (otherwise `PIPELINE_FAILED`); the plugin enables
