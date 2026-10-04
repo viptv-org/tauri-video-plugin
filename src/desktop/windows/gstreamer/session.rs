@@ -309,7 +309,7 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
                 }
             }
             gst::MessageView::Error(error) => {
-                let failure = crate::error::NativeMediaFailure::from_gstreamer(&error.error());
+                let failure = crate::error::NativeMediaFailure::from_bus(error);
                 player.error = Some(failure);
                 return Err(failure.into_error());
             }

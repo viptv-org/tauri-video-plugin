@@ -411,11 +411,19 @@ pub(super) fn mpv_error(error: libmpv2::Error) -> Error {
             libmpv2::mpv_error::Uninitialized => {
                 Error::RuntimeUnavailable("mpv is not initialized".into())
             }
-            libmpv2::mpv_error::LoadingFailed => Error::SourceOpenFailed,
+            libmpv2::mpv_error::LoadingFailed => Error::SourceDiagnostic {
+                code: "SOURCE_OPEN_FAILED",
+                message: format!("MPV media load failed (loading-failed/{}).", code as i32),
+                original: Box::new(Error::SourceOpenFailed),
+            },
             libmpv2::mpv_error::InvalidParameter => {
                 Error::InvalidRequest("mpv rejected an argument".into())
             }
-            _ => Error::Pipeline("mpv operation failed".into()),
+            _ => Error::SourceDiagnostic {
+                code: "PIPELINE_FAILED",
+                message: format!("MPV operation failed ({code:?}/{}).", code as i32),
+                original: Box::new(Error::Pipeline("mpv operation failed".into())),
+            },
         },
         _ => Error::Pipeline("mpv operation failed".into()),
     }

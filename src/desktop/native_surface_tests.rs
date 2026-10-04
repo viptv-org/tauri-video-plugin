@@ -371,3 +371,147 @@ fn real_provider_native_surface_controls() {
     }
     window.close();
 }
+
+#[test]
+#[ignore = "real GTK display and VIPTV_NATIVE_PROVIDER_CASES silent fixture required"]
+fn real_native_http_refusal_and_recovery() {
+    use std::io::{Read, Write};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    gtk::init().expect("GTK display");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let uri = format!("http://{}/refused.m3u8", listener.local_addr().unwrap());
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    let server = std::thread::spawn(move || {
+        while !stopped.load(Ordering::Relaxed) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            let body = r#"{"error":"Account expired","token":"private-body-secret"}"#;
+            let _ = write!(stream, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    let input = std::env::var("VIPTV_NATIVE_PROVIDER_CASES").expect("silent fixture cases");
+    let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(input).unwrap()).unwrap();
+    let fixture: NativeOpenRequest = serde_json::from_value(cases[0]["payload"].clone()).unwrap();
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
+    window.set_default_size(640, 480);
+    let fixed = gtk::Fixed::new();
+    window.add(&fixed);
+    window.show_all();
+    window.present();
+    super::linux_surface::install_qualification_host(fixed);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for engine in ["gstreamer", "mpv"] {
+        for proxied in [false, true] {
+            let key = format!("refusal-{engine}-{proxied}");
+            let mut refused = fixture.clone();
+            refused.session_key = key.clone();
+            refused.uri = uri.clone();
+            refused.backend = Some(engine.into());
+            refused.source_proxy = Some(proxied);
+            refused.headers.clear();
+            refused.cookies = None;
+            refused.user_agent = None;
+            refused.referrer = None;
+            refused.muted = true;
+            refused.volume = 0.0;
+            super::source_diagnostics::remember(&refused);
+            let (refused, pending) = source_proxy::route(refused);
+            let opened = if engine == "gstreamer" {
+                gst::open_player(refused)
+            } else {
+                mpv::open_player(refused)
+            };
+            source_proxy::settle(pending, opened.is_ok());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let error = match opened {
+                Err(error) => error,
+                Ok(_) => loop {
+                    pump();
+                    let start = Instant::now();
+                    let result = stats(engine, &key);
+                    assert!(
+                        start.elapsed() < Duration::from_millis(250),
+                        "failure stats blocked GTK"
+                    );
+                    if let Err(error) = result {
+                        break error;
+                    }
+                    assert!(Instant::now() < deadline, "HTTP refusal never failed");
+                },
+            };
+            let task_key = key.clone();
+            let enriched =
+                runtime.spawn(async move { super::enrich_source_error(&task_key, error).await });
+            while !enriched.is_finished() {
+                pump();
+                assert!(Instant::now() < deadline, "diagnostic never completed");
+            }
+            let error = runtime.block_on(enriched).unwrap();
+            let message = error.to_string();
+            assert!(message.contains("HTTP 407"), "{engine}: {message}");
+            assert!(
+                message.contains("Account expired"),
+                "{engine}: missing response body"
+            );
+            assert!(!message.contains("private-body-secret"));
+            if proxied {
+                assert_eq!(error.code(), "AUTHORIZATION_FAILED");
+                assert!(message.contains("Source response"));
+            } else {
+                assert!(message.contains("Diagnostic GET"));
+            }
+            let close = NativeSessionRequest {
+                session_key: key.clone(),
+            };
+            if engine == "gstreamer" {
+                gst::close(close).unwrap();
+            } else {
+                mpv::close(close).unwrap();
+            }
+            source_proxy::release(&key);
+            super::source_diagnostics::release(&key);
+            let mut valid = fixture.clone();
+            valid.session_key = format!("recovered-{engine}-{proxied}");
+            valid.backend = Some(engine.into());
+            valid.muted = true;
+            valid.volume = 0.0;
+            let valid_key = valid.session_key.clone();
+            let (valid, pending) = source_proxy::route(valid);
+            let opened = if engine == "gstreamer" {
+                gst::open_player(valid)
+            } else {
+                mpv::open_player(valid)
+            };
+            source_proxy::settle(pending, opened.is_ok());
+            opened.unwrap();
+            until(engine, &valid_key, "recovery decode", 10, |s| {
+                s.presented_frames > 2 && s.current_time_seconds > 0.2
+            });
+            let close = NativeSessionRequest {
+                session_key: valid_key.clone(),
+            };
+            if engine == "gstreamer" {
+                gst::close(close).unwrap();
+            } else {
+                mpv::close(close).unwrap();
+            }
+            source_proxy::release(&valid_key);
+            println!("{engine}: HTTP 407 body/redaction, responsive failure and recovery; proxy={proxied}");
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    window.close();
+}

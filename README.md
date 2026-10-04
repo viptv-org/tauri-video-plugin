@@ -70,3 +70,17 @@ Set `VIPTV_NATIVE_FAILURE_RECOVERY=1` for the opt-in GTK control check to first
 open a missing source, verify a source failure rather than a decoder diagnosis,
 and then open valid media in the same engine. Both engines pass this failure
 and replacement sequence on the local desktop display.
+
+Failure diagnostics preserve safe native component/domain/code facts. Proxied
+sources retain the observed HTTP refusal and a bounded, redacted text excerpt.
+Direct-source failures may make one diagnostic range GET, limited to two
+seconds; its labelled result does not replace the original engine error code.
+Observed body reads are capped at 500 ms/2048 bytes, and visible excerpts at
+512 characters. Close, replacement and shutdown retire private diagnostic state.
+The diagnostics module is restricted to Linux/Windows; other desktop hosts
+retain their existing unsupported-surface error.
+
+The ignored `real_native_http_refusal_and_recovery` test uses the same silent
+fixture/display setup above. It verifies actual GStreamer and MPV HTTP 407
+failures, redacted response bodies, responsive GTK polling and subsequent valid
+playback, both directly and through the source proxy.

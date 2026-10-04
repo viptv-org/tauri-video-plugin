@@ -20,7 +20,11 @@ pub(crate) async fn native_open<R: Runtime>(
     }
     #[cfg(desktop)]
     {
-        app.video().desktop().open_native(payload)
+        let key = payload.session_key.clone();
+        match app.video().desktop().open_native(payload) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => Err(crate::desktop::enrich_source_error(&key, error).await),
+        }
     }
 }
 
@@ -70,7 +74,11 @@ pub(crate) async fn native_control<R: Runtime>(
     }
     #[cfg(desktop)]
     {
-        app.video().desktop().control_native(payload)
+        let key = payload.session_key.clone();
+        match app.video().desktop().control_native(payload) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => Err(crate::desktop::enrich_source_error(&key, error).await),
+        }
     }
 }
 
@@ -100,7 +108,11 @@ pub(crate) async fn native_stats<R: Runtime>(
     }
     #[cfg(desktop)]
     {
-        app.video().desktop().stats_native(payload)
+        let key = payload.session_key.clone();
+        match app.video().desktop().stats_native(payload) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => Err(crate::desktop::enrich_source_error(&key, error).await),
+        }
     }
 }
 

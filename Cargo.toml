@@ -59,6 +59,7 @@ jni = "0.21.1"
 # Loopback HLS sanitizing proxy (src/desktop/source_proxy.rs). These crates
 # are already in a Tauri desktop app's graph (tauri, tauri-plugin-http).
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
+serde_json = "1"
 getrandom = "0.3"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
