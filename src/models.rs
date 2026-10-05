@@ -277,10 +277,19 @@ pub struct NativeTrackInfo {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NativeBufferedRange {
+    pub start: f64,
+    pub end: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NativePlaybackSnapshot {
     pub duration_seconds: f64,
     pub current_time_seconds: f64,
     pub buffered_seconds: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buffered_ranges: Option<Vec<NativeBufferedRange>>,
     #[serde(default)]
     pub live: bool,
     #[serde(default = "default_true")]
@@ -311,4 +320,7 @@ pub struct NativePlaybackSnapshot {
     pub source_proxied: bool,
     #[serde(default)]
     pub average_frame_processing_us: f64,
+    /// Nonterminal asynchronous seek/track refusal; never an engine failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_failure: Option<String>,
 }

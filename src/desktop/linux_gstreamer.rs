@@ -66,6 +66,19 @@ impl EngineQueue {
             self.alive.store(false, Ordering::Release);
         }
     }
+    fn shutdown(&self) -> Result<mpsc::Receiver<Result<()>>> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .send(Box::new(move |pipeline| {
+                let result = pipeline
+                    .set_state(gst::State::Null)
+                    .map(|_| ())
+                    .map_err(|_| Error::Pipeline("native shutdown failed".into()));
+                let _ = sender.send(result);
+            }))
+            .map_err(|_| Error::Pipeline("native shutdown worker unavailable".into()))?;
+        Ok(receiver)
+    }
 }
 
 struct NativePlayer {
@@ -92,6 +105,9 @@ struct NativePlayer {
     tracks: Vec<NativeTrackInfo>,
     selected_streams: BTreeSet<String>,
     pending_selection: Option<BTreeSet<String>>,
+    seek_revision: u64,
+    track_revision: u64,
+    control_failure: Option<String>,
 }
 
 pub fn open<R: Runtime>(
@@ -271,6 +287,9 @@ fn create_player(payload: &NativeOpenRequest) -> Result<NativePlayer> {
         tracks: vec![],
         selected_streams: BTreeSet::new(),
         pending_selection: None,
+        seek_revision: 0,
+        track_revision: 0,
+        control_failure: None,
     };
     load_source(&mut player, payload)?;
     Ok(player)
@@ -378,6 +397,9 @@ fn load_source(player: &mut NativePlayer, payload: &NativeOpenRequest) -> Result
         Ordering::SeqCst,
     );
     player.pending_selection = None;
+    player.seek_revision += 1;
+    player.track_revision += 1;
+    player.control_failure = None;
     *player.source.write() = payload.clone();
     if let Some(bus) = player.pipeline.bus() {
         bus.set_flushing(true);
@@ -529,4 +551,32 @@ pub(super) fn qualification_picture() -> (i32, i32) {
             .picture
             .qualification_dimensions()
     })
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_completion_waits_for_prior_jobs_and_null_transition() {
+        gst::init().unwrap();
+        let pipeline = gst::Pipeline::new();
+        pipeline.set_state(gst::State::Ready).unwrap();
+        let queue = EngineQueue::new(pipeline.clone().upcast()).unwrap();
+        let (release, wait) = mpsc::sync_channel(1);
+        queue.submit(move |_| {
+            wait.recv().unwrap();
+        });
+        let completion = queue.shutdown().unwrap();
+        assert!(matches!(
+            completion.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        completion
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pipeline.current_state(), gst::State::Null);
+    }
 }

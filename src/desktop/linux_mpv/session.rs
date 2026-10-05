@@ -232,9 +232,11 @@ pub(super) fn snapshot(player: &mut MpvPlayer) -> Result<NativePlaybackSnapshot>
     let hwdec =
         property::<String>(&player.mpv, "hwdec-current").unwrap_or_else(|| "software".into());
     Ok(NativePlaybackSnapshot {
+        control_failure: None,
         duration_seconds: duration,
         current_time_seconds: position,
         buffered_seconds: buffered,
+        buffered_ranges: None,
         live,
         seekable,
         seekable_start_seconds: seekable_start,

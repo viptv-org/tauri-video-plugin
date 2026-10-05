@@ -50,6 +50,15 @@ response or error-shape changes do (see `VERSIONING.md`).
 Windows engine accepts the fit modes as no-ops). Any other action is
 `INVALID_REQUEST`.
 
+GStreamer asynchronous seek/track refusal is a nonterminal `controlFailure`
+snapshot fact (`seek` or `track`), fenced to the owning session and command
+revision. It does not post a pipeline ERROR or stop stats polling. A new
+seek/track command clears the previous refusal; the shared controller reports
+operation feedback without escalating the selected delivery.
+Seek and track revisions are independent, so a seek cannot discard pending
+track-refusal cleanup. Native buffering includes actual `bufferedRanges` with
+starts and gaps when the engine exposes them; absence is not a full-file cache.
+
 ## Backend selection
 
 The engine is chosen explicitly; there is no silent substitution.
@@ -291,8 +300,10 @@ before GTK's next layout pass.
 
 The Rust `Video.shutdown_native()` API is a host-lifecycle operation, separate
 from a session's ownership-checked `native_close`. Call it from a worker thread;
-the platform dispatcher stops the native engines on the native UI thread before
-returning. Linux GStreamer transitions to NULL and drops its player; MPV stops
+the platform dispatcher retires the native UI player. The host worker then waits
+up to five seconds for Linux GStreamer's serialized engine worker to complete
+the NULL transition, without blocking GTK sink callbacks. Failure or timeout
+returns an error, not a successful cleanup acknowledgement. MPV stops
 and removes its update/render callbacks through its destructor. All process-owned
 HLS proxy routes are retired even when engine cleanup reports an error. The host
 owns renderer/backend lease cleanup and final process termination.

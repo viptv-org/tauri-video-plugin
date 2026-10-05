@@ -12,15 +12,15 @@ thread_local! {
 
 struct SurfaceHost {
     fixed: gtk::Fixed,
-    webview: webkit2gtk::WebView,
-    original_background: gtk::gdk::RGBA,
+    backing: Option<(webkit2gtk::WebView, gtk::gdk::RGBA)>,
 }
 
 pub fn ensure_host<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
-            host.webview
-                .set_background_color(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+            if let Some((webview, _)) = &host.backing {
+                webview.set_background_color(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+            }
             return Ok(());
         }
         let window = app
@@ -94,8 +94,7 @@ pub fn ensure_host<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         webview.set_background_color(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
         *slot.borrow_mut() = Some(SurfaceHost {
             fixed,
-            webview,
-            original_background,
+            backing: Some((webview, original_background)),
         });
         Ok(())
     })
@@ -115,7 +114,9 @@ fn find_webview(widget: &gtk::Widget) -> Option<webkit2gtk::WebView> {
 pub fn restore_backing() {
     HOST.with(|slot| {
         if let Some(host) = slot.borrow().as_ref() {
-            host.webview.set_background_color(&host.original_background);
+            if let Some((webview, background)) = &host.backing {
+                webview.set_background_color(background);
+            }
         }
     });
 }
@@ -143,9 +144,6 @@ pub fn place_widget(widget: &gtk::Widget, x: f64, y: f64, width: f64, height: f6
         widget.queue_resize();
         host.fixed.queue_resize();
         host.fixed.queue_draw();
-        if !widget.is_visible() {
-            widget.show();
-        }
         // Native surfaces need the same allocation even while their parent
         // awaits GTK's next layout pass (including a paused GL frame).
         widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
@@ -155,5 +153,36 @@ pub fn place_widget(widget: &gtk::Widget, x: f64, y: f64, width: f64, height: f6
 
 #[cfg(test)]
 pub(super) fn install_qualification_host(fixed: gtk::Fixed) {
-    HOST.with(|slot| *slot.borrow_mut() = Some(SurfaceHost { fixed }));
+    HOST.with(|slot| {
+        *slot.borrow_mut() = Some(SurfaceHost {
+            fixed,
+            backing: None,
+        })
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a GTK display; run with xvfb-run or a real desktop"]
+    fn layout_preserves_the_engine_owned_visibility_gate() {
+        gtk::init().unwrap();
+        let fixed = gtk::Fixed::new();
+        let window = gtk::Window::new(gtk::WindowType::Toplevel);
+        window.add(&fixed);
+        window.show_all();
+        install_qualification_host(fixed);
+        let widget: gtk::Widget = gtk::DrawingArea::new().upcast();
+        assert!(!widget.is_visible());
+        place_widget(&widget, 0.0, 0.0, 320.0, 180.0).unwrap();
+        assert!(!widget.is_visible(), "layout revealed an undecoded source");
+        widget.show();
+        place_widget(&widget, 0.0, 0.0, 640.0, 360.0).unwrap();
+        assert!(widget.is_visible());
+        widget.hide();
+        place_widget(&widget, 0.0, 0.0, 1920.0, 1080.0).unwrap();
+        assert!(!widget.is_visible(), "fullscreen revealed a retired frame");
+    }
 }

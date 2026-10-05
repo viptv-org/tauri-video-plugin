@@ -119,6 +119,8 @@ impl<R: Runtime> DesktopVideo<R> {
         // native UI dispatcher times out or never executes the operation.
         source_proxy::shutdown();
         source_diagnostics::shutdown();
+        #[cfg(target_os = "linux")]
+        let result = result.and_then(NativeShutdown::wait);
         result
     }
 
@@ -205,6 +207,26 @@ impl<R: Runtime> DesktopVideo<R> {
     #[cfg(not(any(target_os = "linux", windows)))]
     pub fn close_native(&self, _: NativeSessionRequest) -> crate::Result<()> {
         self.unsupported()
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) struct NativeShutdown {
+    completion: Option<mpsc::Receiver<crate::Result<()>>>,
+    result: crate::Result<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl NativeShutdown {
+    fn wait(self) -> crate::Result<()> {
+        // The host worker waits here while GTK remains free to service the sink.
+        let stopped = match self.completion {
+            Some(receiver) => receiver
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| crate::Error::Pipeline("native shutdown did not complete".into()))?,
+            None => Ok(()),
+        };
+        stopped.and(self.result)
     }
 }
 

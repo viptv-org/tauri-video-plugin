@@ -271,6 +271,7 @@ fn sensitive_key(key: &str) -> bool {
         "session",
         "api_key",
         "apikey",
+        "license",
     ]
     .iter()
     .any(|name| key.to_ascii_lowercase().contains(name))
@@ -291,6 +292,7 @@ fn redact_json(value: &mut serde_json::Value) {
                 redact_json(value);
             }
         }
+        serde_json::Value::String(text) => *text = redact_inline(text, true),
         _ => {}
     }
 }
@@ -367,13 +369,24 @@ fn safe_excerpt(raw: &str, request: &NativeOpenRequest) -> String {
             !tag && (!c.is_control() || c.is_whitespace())
         })
         .collect();
+    redact_inline(&text, !structured)
+        .chars()
+        .take(512)
+        .collect()
+}
+
+fn redact_inline(text: &str, detect_keys: bool) -> String {
     let mut hide_next = false;
     text.split_whitespace()
         .map(|word| {
             let hide = hide_next;
-            hide_next = !structured
-                && sensitive_key(word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'));
-            let keyed_secret = !structured
+            let key = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+            hide_next = (hide && key.is_empty())
+                || detect_keys
+                    && (sensitive_key(key)
+                        || key.eq_ignore_ascii_case("bearer")
+                        || key.eq_ignore_ascii_case("basic"));
+            let keyed_secret = detect_keys
                 && word
                     .split_once(':')
                     .is_some_and(|(key, _)| sensitive_key(key));
@@ -395,9 +408,6 @@ fn safe_excerpt(raw: &str, request: &NativeOpenRequest) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-        .chars()
-        .take(512)
-        .collect()
 }
 
 #[cfg(test)]
@@ -429,6 +439,24 @@ mod tests {
             safe_excerpt("<h1>Account expired</h1>", &request()),
             "Account expired"
         );
+    }
+    #[test]
+    fn json_message_values_redact_unknown_inline_credentials() {
+        let spaced = safe_excerpt(
+            r#"{"message":"Account expired. password : newpass Authorization : Basic newbasic"}"#,
+            &request(),
+        );
+        assert!(spaced.contains("Account expired"));
+        assert!(!spaced.contains("newpass"));
+        assert!(!spaced.contains("newbasic"));
+        let text = safe_excerpt(
+            r#"{"message":"Account expired. Authorization: Bearer freshsecret password: othersecret","details":["Cookie: newcookie", "license: newlicense"]}"#,
+            &request(),
+        );
+        assert!(text.contains("Account expired"));
+        for secret in ["freshsecret", "othersecret", "newcookie", "newlicense"] {
+            assert!(!text.contains(secret), "inline credential was exposed");
+        }
     }
     #[tokio::test]
     async fn observed_http_refusal_survives_generic_engine_failure_without_refetch() {

@@ -186,6 +186,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
     gl_area.set_hexpand(false);
     gl_area.set_vexpand(false);
     let widget = gl_area.clone().upcast::<gtk::Widget>();
+    widget.show();
     super::linux_surface::place_widget(
         &widget,
         payload.x,
@@ -321,6 +322,7 @@ fn create_player(payload: &NativeOpenRequest) -> Result<MpvPlayer> {
 
 fn load_source(player: &mut MpvPlayer, payload: &NativeOpenRequest) -> Result<()> {
     open_engine_source(&player.mpv, payload, player.default_buffer)?;
+    player.widget.show();
     super::linux_surface::place_widget(
         &player.widget,
         payload.x,

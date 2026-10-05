@@ -200,6 +200,8 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
         })
         .unwrap_or((0, 0));
     Ok(NativePlaybackSnapshot {
+        buffered_ranges: None,
+        control_failure: None,
         backend: "gstreamer".to_owned(),
         duration_seconds: duration,
         current_time_seconds: position,

@@ -36,6 +36,8 @@ export interface NativeAttachVideoOptions extends AttachVideoOptions {
 }
 
 export interface NativePlaybackSnapshot {
+  controlFailure?: 'seek' | 'track'
+  bufferedRanges?: readonly { start: number; end: number }[]
   durationSeconds: number
   currentTimeSeconds: number
   bufferedSeconds: number

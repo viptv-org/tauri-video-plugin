@@ -60,6 +60,14 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
             .as_mut()
             .ok_or_else(|| Error::InvalidRequest("native player is not open".into()))?;
         ensure_session(&player.session_key, &payload.session_key)?;
+        if matches!(payload.action.as_str(), "seek" | "track" | "deselectTrack") {
+            if payload.action == "seek" {
+                player.seek_revision += 1;
+            } else {
+                player.track_revision += 1;
+            }
+            player.control_failure = None;
+        }
         match payload.action.as_str() {
             "play" => {
                 player.desired_playing = true;
@@ -75,6 +83,7 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
                 let position = gst::ClockTime::from_nseconds((payload.value.max(0.0) * 1e9) as u64);
                 let source = Arc::clone(&player.source);
                 let session_key = payload.session_key.clone();
+                let revision = player.seek_revision;
                 player.engine.submit(move |pipeline| {
                     // A network movie can still be preparing after three
                     // seconds. A timed-out state query returns Ok(Async), so
@@ -105,11 +114,7 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
                             .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, position)
                             .is_err()
                     {
-                        gst::element_error!(
-                            pipeline,
-                            gst::CoreError::Failed,
-                            ("Native seek failed")
-                        );
+                        report_control_refusal(pipeline, &session_key, revision, "seek");
                     }
                 });
             }
@@ -193,21 +198,19 @@ pub fn force_close() -> Result<()> {
     park_player()
 }
 
-pub fn shutdown() -> Result<()> {
+pub fn shutdown() -> Result<Option<std::sync::mpsc::Receiver<Result<()>>>> {
     PLAYER.with(|slot| {
         let Some(player) = slot.borrow_mut().take() else {
-            return Ok(());
+            return Ok(None);
         };
         player.volume_filter.set_property("volume", 0.0_f64);
         player.source.write().session_key.clear();
         player
             .requested_state
             .store(gst::State::Null as u8, Ordering::SeqCst);
-        player.engine.submit(move |pipeline| {
-            let _ = pipeline.set_state(gst::State::Null);
-        });
+        let completion = player.engine.shutdown();
         player.widget.hide();
-        Ok(())
+        completion.map(Some)
     })
 }
 
@@ -258,6 +261,7 @@ pub(super) struct EngineFacts {
     height: u32,
     display_width: f64,
     buffered_end: f64,
+    buffered_ranges: Vec<(f64, f64)>,
 }
 
 /// Queries may wait for streaming locks. Sample off GTK and copy the finished
@@ -288,17 +292,20 @@ fn sample_engine(player: &NativePlayer) {
             .unwrap_or(previous.duration);
         let (live, seekable, seekable_start, seekable_end) = playback_timeline(pipeline, duration);
         let mut buffering = gst::query::Buffering::new(gst::Format::Time);
-        let buffered_end = if pipeline.query(&mut buffering) {
-            buffering
-                .ranges()
-                .map(|(_, end)| end.value())
-                .chain(std::iter::once(buffering.range().1.value()))
-                .filter(|value| *value >= 0)
-                .max()
-                .map(|value| value as f64 / 1e9)
-                .unwrap_or(position)
+        let mut buffered_ranges: Vec<(f64, f64)> = if pipeline.query(&mut buffering) {
+            let mut ranges: Vec<_> = buffering.ranges().collect();
+            if ranges.is_empty() {
+                ranges.push((buffering.range().0, buffering.range().1));
+            }
+            ranges
+                .into_iter()
+                .filter_map(|(start, end)| {
+                    let (start, end) = (start.value(), end.value());
+                    (start >= 0 && end > start).then_some((start as f64 / 1e9, end as f64 / 1e9))
+                })
+                .collect()
         } else {
-            position
+            Vec::new()
         };
         // Decoded/encoded AV queues expose media-time lead even when the
         // progressive-download query cannot describe this source's ranges.
@@ -371,7 +378,13 @@ fn sample_engine(player: &NativePlayer) {
                 }
             }
         }
-        let buffered_end = buffered_end.max(position + queued as f64 / 1e9);
+        if queued > 0 {
+            buffered_ranges.push((position, position + queued as f64 / 1e9));
+        }
+        let buffered_end = buffered_ranges
+            .iter()
+            .map(|(_, end)| *end)
+            .fold(position, f64::max);
         let stats = sink.property::<gst::Structure>("stats");
         let rendered = stats.get::<u64>("rendered").unwrap_or(0);
         let dropped = stats.get::<u64>("dropped").unwrap_or(0);
@@ -404,6 +417,7 @@ fn sample_engine(player: &NativePlayer) {
                 height,
                 display_width,
                 buffered_end,
+                buffered_ranges,
             };
         }
         pending.store(false, Ordering::SeqCst);
@@ -467,6 +481,21 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
         duration_seconds: duration,
         current_time_seconds: position,
         buffered_seconds: buffered,
+        buffered_ranges: Some(
+            facts
+                .buffered_ranges
+                .iter()
+                .filter_map(|(start, end)| {
+                    let end = if duration > 0.0 {
+                        end.min(duration)
+                    } else {
+                        *end
+                    };
+                    (end > *start)
+                        .then_some(crate::models::NativeBufferedRange { start: *start, end })
+                })
+                .collect(),
+        ),
         live,
         seekable,
         seekable_start_seconds: seekable_start,
@@ -485,6 +514,7 @@ pub(super) fn snapshot(player: &mut NativePlayer) -> Result<NativePlaybackSnapsh
             target.saturating_mul(player.buffering_percent.max(0) as u64) / 100
         }),
         average_frame_processing_us: 0.0,
+        control_failure: player.control_failure.clone(),
     })
 }
 
@@ -494,6 +524,24 @@ fn drain_bus(player: &mut NativePlayer) -> Result<()> {
     };
     while let Some(message) = bus.pop() {
         match message.view() {
+            gst::MessageView::Application(application) => {
+                if let Some(details) = application
+                    .structure()
+                    .filter(|s| s.name() == "viptv-control-refused")
+                {
+                    if let Some(action) = refusal_action(
+                        details,
+                        &player.session_key,
+                        player.seek_revision,
+                        player.track_revision,
+                    ) {
+                        player.control_failure = Some(action.into());
+                        if player.control_failure.as_deref() == Some("track") {
+                            player.pending_selection = None;
+                        }
+                    }
+                }
+            }
             gst::MessageView::Buffering(buffering) => {
                 player.buffering_percent = buffering.percent();
                 let target = if player.desired_playing && player.buffering_percent >= 100 {
@@ -651,6 +699,7 @@ fn select_stream(player: &mut NativePlayer, index: i32, enabled: bool) -> Result
     player.pending_selection = Some(selected);
     let source = Arc::clone(&player.source);
     let key = player.session_key.clone();
+    let revision = player.track_revision;
     player.engine.submit(move |pipeline| {
         if source.read().session_key != key {
             return;
@@ -658,12 +707,64 @@ fn select_stream(player: &mut NativePlayer, index: i32, enabled: bool) -> Result
         if !pipeline.send_event(gst::event::SelectStreams::new(
             ids.iter().map(String::as_str),
         )) {
-            gst::element_error!(
-                pipeline,
-                gst::CoreError::Failed,
-                ("Native track selection failed")
-            );
+            report_control_refusal(pipeline, &key, revision, "track");
         }
     });
     Ok(())
+}
+
+fn report_control_refusal(pipeline: &gst::Element, key: &str, revision: u64, action: &str) {
+    let details = gst::Structure::builder("viptv-control-refused")
+        .field("session-key", key)
+        .field("revision", revision)
+        .field("action", action)
+        .build();
+    let _ = pipeline.post_message(gst::message::Application::builder(details).build());
+}
+
+fn refusal_action(
+    details: &gst::StructureRef,
+    key: &str,
+    seek_revision: u64,
+    track_revision: u64,
+) -> Option<&'static str> {
+    let (action, revision) = match details.get::<String>("action").ok().as_deref() {
+        Some("seek") => ("seek", seek_revision),
+        Some("track") => ("track", track_revision),
+        _ => return None,
+    };
+    (details.get::<String>("session-key").ok().as_deref() == Some(key)
+        && details.get::<u64>("revision").ok() == Some(revision))
+    .then_some(action)
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+    use gst::glib::prelude::Cast as GstCast;
+
+    #[test]
+    fn refused_async_controls_post_nonterminal_application_messages() {
+        gst::init().unwrap();
+        let pipeline = gst::Pipeline::new();
+        pipeline.set_state(gst::State::Ready).unwrap();
+        let bus = pipeline.bus().unwrap();
+        while bus.pop().is_some() {}
+        for action in ["seek", "track"] {
+            report_control_refusal(pipeline.upcast_ref(), "test-session", 7, action);
+            let message = bus.pop().unwrap();
+            assert!(matches!(message.view(), gst::MessageView::Application(_)));
+            let details = message.structure().unwrap();
+            assert_eq!(details.get::<String>("action").unwrap(), action);
+            assert_eq!(details.get::<u64>("revision").unwrap(), 7);
+            assert_eq!(refusal_action(details, "test-session", 7, 7), Some(action));
+            assert_eq!(refusal_action(details, "replacement", 7, 7), None);
+            if action == "track" {
+                assert_eq!(refusal_action(details, "test-session", 8, 7), Some("track"));
+                assert_eq!(refusal_action(details, "test-session", 7, 8), None);
+            }
+            assert_eq!(pipeline.current_state(), gst::State::Ready);
+        }
+        pipeline.set_state(gst::State::Null).unwrap();
+    }
 }
