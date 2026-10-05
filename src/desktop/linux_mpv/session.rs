@@ -62,6 +62,9 @@ pub fn control(payload: NativeControlRequest) -> Result<NativePlaybackSnapshot> 
                 )))
             }
         }
+        if matches!(payload.action.as_str(), "fit" | "crop" | "stretch" | "zoom") {
+            schedule_layout_render(player);
+        }
         snapshot(player)
     })
 }
@@ -172,7 +175,7 @@ fn park_player() -> Result<()> {
 pub(super) fn snapshot(player: &mut MpvPlayer) -> Result<NativePlaybackSnapshot> {
     drain_events(player)?;
     if let Some(error) = player.error.borrow().clone() {
-        return Err(Error::Pipeline(error));
+        return Err(Error::VideoOutput(error));
     }
     if player.tracks_dirty {
         refresh_tracks(player);
@@ -272,9 +275,19 @@ fn refresh_tracks(player: &mut MpvPlayer) {
         };
         let mpv_id = property::<i64>(&player.mpv, &format!("{prefix}/id")).unwrap_or(source_index);
         let public_index = tracks.len() as i32;
-        let language = property::<String>(&player.mpv, &format!("{prefix}/lang"))
-            .unwrap_or_else(|| "und".into());
+        let language =
+            property::<String>(&player.mpv, &format!("{prefix}/lang")).unwrap_or_default();
+        let language = if language.eq_ignore_ascii_case("und") {
+            String::new()
+        } else {
+            language
+        };
         let title = property::<String>(&player.mpv, &format!("{prefix}/title")).unwrap_or_default();
+        let title = if title.eq_ignore_ascii_case("und") {
+            String::new()
+        } else {
+            title
+        };
         let codec = property::<String>(&player.mpv, &format!("{prefix}/codec")).unwrap_or_default();
         let selected =
             property::<bool>(&player.mpv, &format!("{prefix}/selected")).unwrap_or(false);
@@ -284,8 +297,20 @@ fn refresh_tracks(player: &mut MpvPlayer) {
             kind,
             language: language.clone(),
             label: if title.is_empty() {
-                if language == "und" {
-                    track_type.clone()
+                if language.is_empty() {
+                    format!(
+                        "{} {}",
+                        match kind {
+                            TrackKind::Audio => "Audio",
+                            TrackKind::Video => "Video",
+                            TrackKind::Subtitle => "Subtitle",
+                        },
+                        tracks
+                            .iter()
+                            .filter(|track: &&NativeTrackInfo| track.kind == kind)
+                            .count()
+                            + 1
+                    )
                 } else {
                     language.to_uppercase()
                 }
@@ -346,7 +371,7 @@ fn drain_events(player: &mut MpvPlayer) -> Result<()> {
             tracing::warn!(%error, "mpv event error");
             error
         })? {
-            Event::Shutdown => return Err(Error::Pipeline("mpv shut down".into())),
+            Event::Shutdown => return Err(Error::RuntimeUnavailable("mpv shut down".into())),
             Event::StartFile | Event::FileLoaded | Event::VideoReconfig | Event::AudioReconfig => {
                 player.tracks_dirty = true
             }
@@ -372,7 +397,36 @@ pub(super) fn property<T: libmpv2::GetData>(mpv: &Mpv, name: &str) -> Option<T> 
 }
 
 pub(super) fn mpv_error(error: libmpv2::Error) -> Error {
-    Error::Pipeline(format!("mpv backend: {error}"))
+    match error {
+        libmpv2::Error::Loadfile { error } => mpv_error((*error).clone()),
+        libmpv2::Error::VersionMismatch { .. } => {
+            Error::RuntimeUnavailable("mpv version mismatch".into())
+        }
+        libmpv2::Error::Raw(code) => match code {
+            libmpv2::mpv_error::UnknownFormat => Error::MediaFormat,
+            libmpv2::mpv_error::VoInitFailed => {
+                Error::VideoOutput("mpv video output initialization failed".into())
+            }
+            libmpv2::mpv_error::AoInitFailed => Error::AudioOutput,
+            libmpv2::mpv_error::Uninitialized => {
+                Error::RuntimeUnavailable("mpv is not initialized".into())
+            }
+            libmpv2::mpv_error::LoadingFailed => Error::SourceDiagnostic {
+                code: "SOURCE_OPEN_FAILED",
+                message: format!("MPV media load failed (loading-failed/{code})."),
+                original: Box::new(Error::SourceOpenFailed),
+            },
+            libmpv2::mpv_error::InvalidParameter => {
+                Error::InvalidRequest("mpv rejected an argument".into())
+            }
+            _ => Error::SourceDiagnostic {
+                code: "PIPELINE_FAILED",
+                message: format!("MPV operation failed ({code:?}/{code})."),
+                original: Box::new(Error::Pipeline("mpv operation failed".into())),
+            },
+        },
+        _ => Error::Pipeline("mpv operation failed".into()),
+    }
 }
 
 pub(super) fn open_gl_proc_address(_: &(), name: &str) -> *mut c_void {
@@ -384,5 +438,26 @@ pub(super) fn open_gl_proc_address(_: &(), name: &str) -> *mut c_void {
         unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) }
     } else {
         pointer
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn mpv_failures_preserve_output_and_source_causes() {
+        for (raw, code) in [
+            (libmpv2::mpv_error::VoInitFailed, "VIDEO_OUTPUT_FAILED"),
+            (libmpv2::mpv_error::AoInitFailed, "AUDIO_OUTPUT_FAILED"),
+            (libmpv2::mpv_error::Uninitialized, "RUNTIME_UNAVAILABLE"),
+            (libmpv2::mpv_error::UnknownFormat, "MEDIA_FORMAT_FAILED"),
+            (libmpv2::mpv_error::LoadingFailed, "SOURCE_OPEN_FAILED"),
+            (libmpv2::mpv_error::Generic, "PIPELINE_FAILED"),
+        ] {
+            let error = mpv_error(libmpv2::Error::Raw(raw));
+            assert_eq!(error.code(), code);
+            assert!(!error.to_string().contains("decode"));
+        }
     }
 }

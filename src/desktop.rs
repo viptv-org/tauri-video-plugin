@@ -49,6 +49,7 @@ use windows as platform;
 impl<R: Runtime> DesktopVideo<R> {
     #[cfg(any(target_os = "linux", windows))]
     pub fn open_native(&self, payload: NativeOpenRequest) -> crate::Result<NativePlaybackSnapshot> {
+        source_diagnostics::remember(&payload);
         // HLS sources are served through the loopback sanitizing proxy; the
         // registration only becomes current once the engine accepts it.
         let (payload, pending) = source_proxy::route(payload);
@@ -92,7 +93,7 @@ impl<R: Runtime> DesktopVideo<R> {
     #[cfg(any(target_os = "linux", windows))]
     pub fn close_native(&self, payload: NativeSessionRequest) -> crate::Result<()> {
         let session_key = payload.session_key.clone();
-        self.run_on_main(move |_| {
+        let result = self.run_on_main(move |_| {
             // Explicit debug-only fault injection for the host's watchdog test.
             #[cfg(debug_assertions)]
             if std::env::var("VIPTV_TEST_BLOCK_NATIVE_CLOSE")
@@ -103,11 +104,12 @@ impl<R: Runtime> DesktopVideo<R> {
                 std::thread::sleep(Duration::from_secs(60));
             }
             platform::close(payload)
-        })?;
+        });
         // Same ownership rule as the engine: a late close from an older
         // controller leaves the newer session's route alone.
         source_proxy::release(&session_key);
-        Ok(())
+        source_diagnostics::release(&session_key);
+        result
     }
 
     #[cfg(any(target_os = "linux", windows))]
@@ -116,6 +118,7 @@ impl<R: Runtime> DesktopVideo<R> {
         // Route cancellation is thread-safe and must still run when the
         // native UI dispatcher times out or never executes the operation.
         source_proxy::shutdown();
+        source_diagnostics::shutdown();
         result
     }
 
@@ -212,7 +215,21 @@ fn with_proxy_flag(mut snapshot: NativePlaybackSnapshot, proxied: bool) -> Nativ
 }
 
 #[cfg(any(target_os = "linux", windows))]
+pub(crate) mod source_diagnostics;
+#[cfg(any(target_os = "linux", windows))]
 pub(crate) mod source_proxy;
+
+pub(crate) async fn enrich_source_error(key: &str, error: crate::Error) -> crate::Error {
+    #[cfg(any(target_os = "linux", windows))]
+    {
+        source_diagnostics::enrich(key, error).await
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = key;
+        error
+    }
+}
 
 #[cfg(windows)]
 mod windows;
@@ -267,3 +284,11 @@ use unavailable_linux_backend as linux_gstreamer;
     any(not(feature = "mpv-runtime"), not(feature = "gstreamer-runtime"))
 ))]
 mod unavailable_linux_backend;
+
+#[cfg(all(
+    test,
+    target_os = "linux",
+    feature = "gstreamer-runtime",
+    feature = "mpv-runtime"
+))]
+mod native_surface_tests;

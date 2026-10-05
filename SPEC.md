@@ -217,7 +217,13 @@ or included in `Debug` output.
 | `PROTOCOL_MISMATCH` | client/plugin protocol or package metadata mismatch | no | `protocol` |
 | `INVALID_REQUEST` | malformed request, stale session key, rejected authorization, unknown backend/action | no | — |
 | `RUNTIME_UNAVAILABLE` | requested engine not compiled or its runtime failed to initialize | no | — |
-| `PIPELINE_FAILED` | the engine could not demux/decode this delivery, or the native UI dispatcher failed/timed out (15 s) | yes | `pipeline` |
+| `PIPELINE_FAILED` | a pipeline, operation or native UI dispatcher failure whose cause is not known to be decoding | yes | `pipeline` |
+| `DECODE_FAILED` | an explicit decoder/codec failure | yes | `decode` |
+| `MEDIA_FORMAT_FAILED` | the source did not provide recognizable media | no | `decode` |
+| `VIDEO_OUTPUT_FAILED` | native video surface initialization or rendering failed | no | `video-output` |
+| `AUDIO_OUTPUT_FAILED` | native audio output initialization failed | no | `audio-output` |
+| `PROTECTED_MEDIA` | media decryption/key access failed | no | — |
+| `SOURCE_OPEN_FAILED` | source loading failed without a more specific cause | no | — |
 | `AUTHORIZATION_FAILED` | the origin refused authorization (GStreamer `NotAuthorized`) | no | — |
 | `CONNECTION_FAILED` | the origin could not be read (`OpenRead`, `Read`, `Close`, `Busy`, …) | yes | — |
 | `SOURCE_UNAVAILABLE` | the source is missing or expired (`NotFound`) | no | — |
@@ -233,6 +239,11 @@ runtime facts of the installed engine and hardware.
   `GtkGLArea` (`mpv-runtime`, explicit). TLS trust: `tlsCaFile` loads a GIO
   file database on GStreamer (a load failure is logged and the system trust is
   kept) and maps to mpv `tls-ca-file`.
+  GStreamer materializes RGBA SystemMemory through `videoconvert` before GL
+  upload, so hardware decoder buffers need not support direct import into the
+  GTK GL context. Decoder selection stays native; this compatibility transfer
+  adds CPU conversion/copy work. The existing GL subtitle compositor and
+  picture viewport remain downstream of it.
 - **Windows:** GStreamer with D3D11 decoding presented as a WebView2 texture
   stream on the real `<video>` element. `native_prepare_texture_stream` must
   succeed before `native_open` (otherwise `PIPELINE_FAILED`); the plugin enables

@@ -3,6 +3,188 @@ use std::net::TcpListener;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+/// Run independent real movie deliveries concurrently through the production
+/// libmpv open sequence. Input stays private; output contains aliases and facts.
+#[cfg(feature = "mpv-runtime")]
+#[test]
+#[ignore = "VIPTV_NATIVE_PROVIDER_CASES private movie delivery JSON required"]
+fn concurrent_real_movie_mpv_playback() {
+    let path = std::env::var("VIPTV_NATIVE_PROVIDER_CASES").expect("private case file");
+    let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let cases = cases.as_array().unwrap();
+    assert_eq!(cases.len(), 20, "qualify twenty distinct movies");
+    let threads: Vec<_> = cases
+        .iter()
+        .cloned()
+        .map(|case| {
+            std::thread::spawn(move || {
+                let alias = case["alias"].as_str().unwrap();
+                let payload: crate::models::NativeOpenRequest =
+                    serde_json::from_value(case["payload"].clone()).unwrap();
+                let mut mpv = super::linux_mpv::create_engine().unwrap();
+                mpv.set_property("vo", "null").unwrap();
+                mpv.set_property("ao", "null").unwrap();
+                let defaults = super::linux_mpv::MpvBufferDefaults::read(&mpv);
+                super::linux_mpv::open_engine_source(&mpv, &payload, defaults).unwrap();
+                // Reproduce the shared adapter's historical second, immediate resume
+                // seek. It runs before libmpv has loaded the file and returns -12.
+                if std::env::var_os("VIPTV_REPRO_EARLY_RESUME_SEEK").is_some() {
+                    let result = mpv.command(
+                        "seek",
+                        &[&payload.start_at_seconds.to_string(), "absolute+exact"],
+                    );
+                    println!("{alias}: immediate adapter resume seek={result:?}");
+                }
+                let deadline = Instant::now() + Duration::from_secs(60);
+                loop {
+                    while let Some(event) = mpv.wait_event(0.0) {
+                        assert!(event.is_ok(), "{alias}: native event failed: {event:?}");
+                    }
+                    let time = mpv.get_property::<f64>("time-pos").unwrap_or(0.0);
+                    let width = mpv.get_property::<i64>("video-params/w").unwrap_or(0);
+                    if time > payload.start_at_seconds + 0.5 && width > 0 {
+                        println!("{alias}: decoded resume time={time:.2} width={width}");
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "{alias}: decode timeout time={time:.2} width={width}"
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                mpv.set_property("pause", true).unwrap();
+                mpv.command("seek", &["60", "absolute+exact"]).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while (mpv.get_property::<f64>("time-pos").unwrap_or(0.0) - 60.0).abs() > 1.0 {
+                    assert!(Instant::now() < deadline, "{alias}: seek timeout");
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                mpv.set_property("pause", false).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while mpv.get_property::<f64>("time-pos").unwrap_or(0.0) < 60.5 {
+                    assert!(Instant::now() < deadline, "{alias}: resume timeout");
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                mpv.command("stop", &[]).unwrap();
+                println!("{alias}: PASS decode, start position, pause, seek, resume, stop");
+            })
+        })
+        .collect();
+    let mut failures = 0;
+    for thread in threads {
+        if thread.join().is_err() {
+            failures += 1;
+        }
+    }
+    assert_eq!(failures, 0, "inspect every failed movie above");
+}
+
+#[cfg(feature = "gstreamer-runtime")]
+#[test]
+#[ignore = "VIPTV_NATIVE_PROVIDER_CASES private movie delivery JSON required"]
+fn concurrent_real_movie_gstreamer_playback() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    gst::init().unwrap();
+    let path = std::env::var("VIPTV_NATIVE_PROVIDER_CASES").expect("private case file");
+    let cases: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let cases = cases.as_array().unwrap();
+    assert_eq!(cases.len(), 20);
+    let threads: Vec<_> = cases
+        .iter()
+        .cloned()
+        .map(|case| {
+            std::thread::spawn(move || {
+                let alias = case["alias"].as_str().unwrap();
+                let payload: crate::models::NativeOpenRequest =
+                    serde_json::from_value(case["payload"].clone()).unwrap();
+                let pipeline = gst::ElementFactory::make("playbin3").build().unwrap();
+                pipeline.set_property("uri", &payload.uri);
+                let authorization = payload.clone();
+                pipeline.connect("source-setup", false, move |values| {
+                    if let Ok(element) = values[1].get::<gst::Element>() {
+                        super::linux_gstreamer::configure_source(&element, &authorization);
+                    }
+                    None
+                });
+                let frames = Arc::new(AtomicUsize::new(0));
+                for property in ["video-sink", "audio-sink"] {
+                    let sink = gst::ElementFactory::make("fakesink").build().unwrap();
+                    sink.set_property("sync", true);
+                    if property == "video-sink" {
+                        let frames = Arc::clone(&frames);
+                        sink.set_property("signal-handoffs", true);
+                        sink.connect("handoff", false, move |_| {
+                            frames.fetch_add(1, Ordering::Relaxed);
+                            None
+                        });
+                    }
+                    pipeline.set_property(property, sink);
+                }
+                let result = (|| -> std::result::Result<(), String> {
+                    pipeline
+                        .set_state(gst::State::Paused)
+                        .map_err(|_| "preroll failed".to_owned())?;
+                    let (transition, state, _) =
+                        pipeline.state(Some(gst::ClockTime::from_seconds(30)));
+                    if transition.is_err() || state != gst::State::Paused {
+                        return Err("preroll failed".into());
+                    }
+                    pipeline
+                        .seek_simple(
+                            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                            gst::ClockTime::from_seconds(30),
+                        )
+                        .map_err(|_| "initial seek failed".to_owned())?;
+                    pipeline
+                        .set_state(gst::State::Playing)
+                        .map_err(|_| "play failed".to_owned())?;
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    loop {
+                        if let Some(message) = pipeline
+                            .bus()
+                            .unwrap()
+                            .pop_filtered(&[gst::MessageType::Error])
+                        {
+                            if let gst::MessageView::Error(error) = message.view() {
+                                let failure =
+                                    crate::error::NativeMediaFailure::from_bus(error).into_error();
+                                return Err(failure.to_string());
+                            }
+                        }
+                        let time = pipeline
+                            .query_position::<gst::ClockTime>()
+                            .map(|t| t.seconds_f64())
+                            .unwrap_or(0.0);
+                        if frames.load(Ordering::Relaxed) > 2 && time > 30.5 {
+                            println!(
+                                "{alias}: PASS GStreamer frames={} resume time={time:.2}",
+                                frames.load(Ordering::Relaxed)
+                            );
+                            return Ok(());
+                        }
+                        if Instant::now() >= deadline {
+                            return Err("decode timeout".into());
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                })();
+                pipeline.set_state(gst::State::Null).unwrap();
+                if let Err(error) = result {
+                    panic!("{alias}: {error}");
+                }
+            })
+        })
+        .collect();
+    let failures = threads
+        .into_iter()
+        .filter_map(|thread| thread.join().err())
+        .count();
+    assert_eq!(failures, 0, "inspect every failed movie above");
+}
+
 #[cfg(feature = "gstreamer-runtime")]
 use gstreamer as gst;
 

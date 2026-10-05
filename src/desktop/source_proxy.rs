@@ -238,7 +238,7 @@ fn random_token() -> Option<String> {
 }
 
 /// The validated source authorization as upstream request headers.
-fn upstream_headers(payload: &NativeOpenRequest) -> Option<HeaderMap> {
+pub(super) fn upstream_headers(payload: &NativeOpenRequest) -> Option<HeaderMap> {
     let mut headers = HeaderMap::new();
     let mut insert = |name: &str, value: &str| -> Option<()> {
         let name = HeaderName::from_bytes(name.as_bytes()).ok()?;
@@ -263,7 +263,7 @@ fn upstream_headers(payload: &NativeOpenRequest) -> Option<HeaderMap> {
     Some(headers)
 }
 
-fn client(payload: &NativeOpenRequest, upstream: &Url) -> Option<reqwest::Client> {
+pub(super) fn client(payload: &NativeOpenRequest, upstream: &Url) -> Option<reqwest::Client> {
     // A public source may not redirect the proxy into the local network or
     // to the proxy itself; a source that is already local may.
     let allow_private = is_private_host(upstream);

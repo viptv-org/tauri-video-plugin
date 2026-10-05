@@ -378,7 +378,10 @@ impl Fetch<'_> {
                 status = response.status().as_u16(),
                 "source proxy upstream refused a request"
             );
-            return Err(response.status());
+            let status = response.status();
+            crate::desktop::source_diagnostics::observe_response(&self.route.session_key, response)
+                .await;
+            return Err(status);
         }
         Ok((response, permit))
     }
