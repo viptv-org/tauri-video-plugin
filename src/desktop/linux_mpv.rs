@@ -99,7 +99,9 @@ impl Drop for MpvPlayer {
             self.gl_area.disconnect(signal);
         }
         // libmpv requires its render context to be destroyed before the
-        // owning mpv handle.
+        // owning mpv handle, with the same OpenGL context current as at
+        // creation. GTK/WebKit may have selected another context since our
+        // last render callback.
         self.gl_area.make_current();
         *self.render_context.borrow_mut() = None;
         self.widget.hide();

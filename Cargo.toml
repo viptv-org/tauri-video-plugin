@@ -72,6 +72,7 @@ gio = { version = "0.22", optional = true }
 gstreamer = { version = "0.25.3", optional = true }
 gstreamer-video = { version = "0.25.3", optional = true }
 gtk = "0.18.2"
+webkit2gtk = { version = "2.0.2", features = ["v2_8"] }
 libc = { version = "0.2", optional = true }
 libmpv2 = { version = "5.0.3", default-features = true, optional = true }
 libmpv2-sys = { version = "4.0.1", optional = true }

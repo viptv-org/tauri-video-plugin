@@ -74,3 +74,26 @@ Validated from commit `3147bd3d0798a9c4107608fd4a9d190c120ff611` on 2026-09-12.
 | native GStreamer/MPV validation | not run: `gstreamer-1.0` and `libmpv` are absent from `pkg-config` |
 
 Rust/Cargo are installed at `/home/node/.cargo/bin`; only this shell path prevented the Rust command from being discovered. The passing suite verifies the TypeScript adapter/controller protocol. It does not establish a native Tauri surface, GStreamer, MPV, Windows texture, Android, codec, DRM, HDR, or physical-device playback claim.
+
+## Linux backing and GL context lifecycle, 2026-10-02
+
+Code inspection found that the native surface host made WebKit backing
+transparent permanently, including ordinary screens after a valid native close.
+The host now captures the original WebKit RGBA, reapplies transparency whenever
+playback opens (including host reuse), and restores the original backing after
+an owning-session close, shutdown or failed open with no active backend.
+Stale-session closes retain the current presentation. The GTK host and parked
+video widgets keep their existing lifetime.
+
+MPV's GLib idle update and render-context destruction also omitted selecting
+the owning GtkGLArea context. The installed primary libmpv render API contract
+requires that same context current for its render API calls. Both paths now
+select it; updates refuse the call when GTK reports a context error.
+
+Formatting and static compilation are checked separately from runtime tests.
+The owner paused testing: no playback, screenshot loops or package builds were
+run for this change. These corrections do not establish that the reported
+GStreamer playing-controls/sidebar flicker is fixed. The temporary app-local
+WebKit Never comparison and observer were removed from the private scratch
+product files; black captures and renderer crashes are excluded from visual
+qualification. No acceleration-policy change is shipped.
